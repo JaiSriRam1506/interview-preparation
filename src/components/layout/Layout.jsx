@@ -58,25 +58,25 @@ export default function Layout() {
         {/* Mobile top bar */}
         <div className="lg:hidden sticky top-0 z-40 bg-white/90 dark:bg-gray-900/90 backdrop-blur border-b border-gray-200 dark:border-gray-800">
           <div
-            className={`px-4 flex items-center justify-between gap-3 ${
+            className={`px-4 flex justify-between gap-3 ${
               mobileTopBar ? "min-h-14 py-2" : "h-14"
             }`}
           >
             <button
               onClick={() => setOpen(true)}
-              className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"
+              className="p-0.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"
               aria-label="Open menu"
             >
               <Menu className="h-5 w-5" />
             </button>
 
-            <div className="flex-1 min-w-0">
+            <div className="flex-1 min-w-0 overflow-hidden pt-1">
               {mobileTopBar?.center || (
                 <div className="w-6" aria-hidden="true" />
               )}
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-start gap-2 flex-shrink-0 pt-1">
               {mobileTopBar?.right || null}
               <button
                 onClick={toggle}

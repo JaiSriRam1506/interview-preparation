@@ -2891,6 +2891,28 @@ const InterviewSession = () => {
               handleStartRecording();
               return;
             }
+
+            // When permission is in the "prompt" state, the browser will show its
+            // own permission sheet on the next user gesture.
+            // Don't show our in-app modal as well (it feels like a 2x popup).
+            if (status?.state === "prompt") {
+              try {
+                setNeedsUserGestureResume(true);
+              } catch {
+                // ignore
+              }
+              setListeningText((prev) => prev || "Tap to enable microphone…");
+              return;
+            }
+
+            // If the user previously denied mic access, guide them via browser settings.
+            if (status?.state === "denied") {
+              setListeningText((prev) => prev || "Microphone permission denied.");
+              toast.error(
+                "Microphone permission denied. Enable it in browser settings and reload."
+              );
+              return;
+            }
           } catch {
             // ignore
           }
@@ -2899,13 +2921,14 @@ const InterviewSession = () => {
         // ignore
       }
 
-      // Otherwise, show an explicit permission popup (better UX on iOS/Android).
-      setListeningText((prev) => prev || "Enable microphone to start…");
-      if (!micPermissionDialogShownRef.current) {
-        openMicPermissionDialog(
-          "Allow microphone access to use speech-to-text on this screen."
-        );
+      // Permissions API not available: don't show an extra in-app modal.
+      // Arm the next gesture to trigger the browser prompt.
+      try {
+        setNeedsUserGestureResume(true);
+      } catch {
+        // ignore
       }
+      setListeningText((prev) => prev || "Tap to enable microphone…");
     };
 
     void run();
@@ -3540,6 +3563,14 @@ const InterviewSession = () => {
           });
 
           if (effectiveProvider === "elevenlabs_client") {
+            // If ElevenLabs realtime is already connected, do NOT force a reconnect
+            // on Clear. Reconnecting briefly flips the status to Disconnected and
+            // can disturb the live pipeline on some browsers.
+            if (elevenClientConnected && scribeRef.current) {
+              elevenClientBaseRef.current = "";
+              ignoreRealtimeUntilRef.current = Date.now() + 800;
+              return;
+            }
             if (elevenClientConnectInFlightRef.current) return;
             elevenClientConnectInFlightRef.current = true;
             // Suppress fallback/toasts while we intentionally reconnect.
@@ -3874,14 +3905,11 @@ const InterviewSession = () => {
           // Require a user gesture (tap / AI Answer) before connecting.
           if (hideExtras && isAndroidBrowser() && !fromUserGesture) {
             try {
-              setNeedsUserGestureResume(false);
+              setNeedsUserGestureResume(true);
             } catch {
               // ignore
             }
-            setListeningText((prev) => prev || "Enable microphone to start…");
-            openMicPermissionDialog(
-              "Enable microphone permission to start listening."
-            );
+            setListeningText((prev) => prev || "Tap to enable microphone…");
             return;
           }
 
@@ -4107,11 +4135,28 @@ const InterviewSession = () => {
         // Android can throw NotAllowedError when not started from a user gesture.
         try {
           if (hideExtras) {
-            setNeedsUserGestureResume(false);
-            setListeningText((prev) => prev || "Enable microphone to start…");
-            openMicPermissionDialog(
-              "Microphone permission is needed. Tap Allow to continue."
-            );
+            // Avoid a second in-app popup; let the browser permission sheet handle it.
+            setListeningText((prev) => prev || "Tap to enable microphone…");
+            try {
+              const perms = navigator?.permissions;
+              if (perms?.query) {
+                const status = await perms.query({ name: "microphone" });
+                if (status?.state === "denied") {
+                  toast.error(
+                    "Microphone permission denied. Enable it in browser settings and reload."
+                  );
+                } else {
+                  setNeedsUserGestureResume(true);
+                  showMicResumeToast();
+                }
+              } else {
+                setNeedsUserGestureResume(true);
+                showMicResumeToast();
+              }
+            } catch {
+              setNeedsUserGestureResume(true);
+              showMicResumeToast();
+            }
           } else {
             toast.error(
               "Microphone permission denied. Allow mic access and retry."
@@ -4129,7 +4174,7 @@ const InterviewSession = () => {
       ) {
         if (hideExtras) {
           // Treat as recoverable via user interaction / permissions.
-          setNeedsUserGestureResume(false);
+          setNeedsUserGestureResume(true);
           setListeningText(
             (prev) =>
               prev ||
@@ -4139,14 +4184,7 @@ const InterviewSession = () => {
                   ? "No microphone found. Connect a mic and tap to retry…"
                   : "Microphone is busy. Close other apps using mic and tap to retry…")
           );
-
-          openMicPermissionDialog(
-            name === "SecurityError"
-              ? "Microphone is blocked (HTTPS required)."
-              : name === "NotFoundError"
-                ? "No microphone found. Connect a mic and tap Allow to retry."
-                : "Microphone is busy. Close other apps and tap Allow to retry."
-          );
+          showMicResumeToast();
         } else {
           toast.error("Couldn’t access microphone. Check browser permissions.");
         }
@@ -4422,7 +4460,7 @@ const InterviewSession = () => {
             {session.settings.aiModel.replace(/-/g, " ").toUpperCase()}
           </span>
         </div>
-        <div className="mt-0.5 text-xs text-gray-500 dark:text-gray-400 leading-snug whitespace-normal break-words">
+        <div className="mt-0.5 text-xs text-gray-500 dark:text-gray-400 leading-snug truncate sm:whitespace-normal sm:break-words">
           {sttWsLabel}
         </div>
       </div>
@@ -4971,8 +5009,8 @@ const InterviewSession = () => {
               >
                 {hideExtras ? (
                   <div className="max-w-7xl mx-auto">
-                    <div className="w-fit ml-auto bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-lg p-1.5 sm:p-3">
-                      <div className="flex items-center justify-end gap-2">
+                    <div className="w-fit mx-auto bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-lg p-1.5 sm:p-3">
+                      <div className="flex items-center justify-center gap-2">
                         <button
                           type="button"
                           onClick={handleGenerateAIAnswer}
@@ -5377,6 +5415,11 @@ const InterviewSession = () => {
 
       <ConnectModal
         open={connectOpen}
+        onBack={() => {
+          connectDismissedRef.current = true;
+          setConnectOpen(false);
+          navigate("/sessions/create");
+        }}
         onClose={() => {
           connectDismissedRef.current = true;
           setConnectOpen(false);
