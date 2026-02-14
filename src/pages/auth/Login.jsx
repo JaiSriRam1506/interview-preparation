@@ -1,0 +1,78 @@
+import React from "react";
+import { useForm } from "react-hook-form";
+import { Link, useNavigate } from "react-router-dom";
+import { useAuth } from "../../contexts/AuthContext";
+
+export default function Login() {
+  const { login } = useAuth();
+  const navigate = useNavigate();
+  const {
+    register,
+    handleSubmit,
+    formState: { errors, isSubmitting },
+  } = useForm();
+
+  const onSubmit = async (values) => {
+    await login(values.email, values.password);
+    navigate("/dashboard");
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center p-6 bg-gray-50 dark:bg-gray-900">
+      <div className="max-w-md w-full bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl shadow p-8">
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
+          Welcome back
+        </h1>
+        <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">
+          Login to continue
+        </p>
+
+        <form className="mt-6 space-y-4" onSubmit={handleSubmit(onSubmit)}>
+          <div>
+            <label className="text-sm font-medium text-gray-700 dark:text-gray-200">
+              Email
+            </label>
+            <input
+              type="email"
+              {...register("email", { required: "Email required" })}
+              className="mt-1 w-full px-4 py-3 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800"
+            />
+            {errors.email && (
+              <p className="text-sm text-red-600 mt-1">
+                {errors.email.message}
+              </p>
+            )}
+          </div>
+          <div>
+            <label className="text-sm font-medium text-gray-700 dark:text-gray-200">
+              Password
+            </label>
+            <input
+              type="password"
+              {...register("password", { required: "Password required" })}
+              className="mt-1 w-full px-4 py-3 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800"
+            />
+            {errors.password && (
+              <p className="text-sm text-red-600 mt-1">
+                {errors.password.message}
+              </p>
+            )}
+          </div>
+          <button
+            disabled={isSubmitting}
+            className="w-full px-4 py-3 rounded-lg bg-primary-600 text-white font-semibold hover:bg-primary-700 disabled:opacity-50"
+          >
+            {isSubmitting ? "Signing in..." : "Sign in"}
+          </button>
+        </form>
+
+        <p className="mt-6 text-sm text-gray-600 dark:text-gray-300">
+          New here?{" "}
+          <Link to="/register" className="text-primary-600 font-semibold">
+            Create account
+          </Link>
+        </p>
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,64 @@
+import { defineConfig, loadEnv } from "vite";
+import react from "@vitejs/plugin-react";
+
+// https://vite.dev/config/
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), "");
+  const backendTarget = env.VITE_BACKEND_URL || "http://localhost:3000";
+  const hmrHost = env.VITE_HMR_HOST || "";
+
+  const configureProxy = (proxy) => {
+    // Vite uses node-http-proxy under the hood.
+    // ECONNABORTED/ECONNRESET often happen when the browser refreshes or the backend restarts.
+    // They are usually harmless but noisy; ignore them.
+    proxy.on("error", (err, _req, _res) => {
+      const code = String(err?.code || "");
+      if (code === "ECONNABORTED" || code === "ECONNRESET") return;
+      // Keep other errors visible.
+      // eslint-disable-next-line no-console
+      console.error("proxy error", err);
+    });
+  };
+
+  const hmr = hmrHost
+    ? {
+        // When served via https ngrok domain, HMR should use wss on 443.
+        host: hmrHost,
+        protocol: "wss",
+        clientPort: 443,
+      }
+    : undefined;
+
+  return {
+    plugins: [react()],
+    server: {
+      // Bind to all interfaces (fixes ngrok access on Windows where Vite may bind only to ::1).
+      host: true,
+      port: 5174,
+      strictPort: true,
+      // Needed for ngrok/mobile access; otherwise Vite blocks unknown Host headers.
+      allowedHosts: true,
+      hmr,
+      proxy: {
+        "/api": {
+          target: backendTarget,
+          ws: true,
+          changeOrigin: true,
+          secure: false,
+          configure: configureProxy,
+          timeout: 60_000,
+          proxyTimeout: 60_000,
+        },
+        "/socket.io": {
+          target: backendTarget,
+          ws: true,
+          changeOrigin: true,
+          secure: false,
+          configure: configureProxy,
+          timeout: 60_000,
+          proxyTimeout: 60_000,
+        },
+      },
+    },
+  };
+});
