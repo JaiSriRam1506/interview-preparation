@@ -4,12 +4,24 @@ import toast from "react-hot-toast";
 
 const resolveBaseUrl = () => {
   const explicit = import.meta.env.VITE_API_URL;
+  const backendUrl = import.meta.env.VITE_BACKEND_URL;
 
   // Prefer relative API in dev/prod so Vite/nginx can proxy `/api` correctly
   // (critical for ngrok + iOS, where `localhost` would point to the phone itself).
   const defaultRelative = "/api/v1";
 
-  if (!explicit) return defaultRelative;
+  if (!explicit) {
+    const b = String(backendUrl || "").trim();
+    if (!b) return defaultRelative;
+    try {
+      const u = new URL(b);
+      // Use the backend origin + fixed API prefix.
+      return `${u.origin}/api/v1`;
+    } catch {
+      // If backendUrl isn't a valid URL, fall back to relative.
+      return defaultRelative;
+    }
+  }
 
   try {
     // If explicit is a relative path, keep it.
@@ -29,6 +41,8 @@ const resolveBaseUrl = () => {
     // ignore it and use the relative path so the dev server can proxy.
     if (!isCurrentLocalhost && isExplicitLocalhost) return defaultRelative;
 
+    // If explicit is a full backend URL, keep it as-is.
+    // NOTE: Prefer setting VITE_BACKEND_URL on Vercel and leaving VITE_API_URL unset.
     return explicit;
   } catch {
     return defaultRelative;

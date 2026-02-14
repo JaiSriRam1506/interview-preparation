@@ -14,7 +14,10 @@ export const SocketProvider = ({ children }) => {
   const [socket, setSocket] = useState(null);
 
   useEffect(() => {
-    const url = import.meta.env.VITE_SOCKET_URL || window.location.origin;
+    const url =
+      import.meta.env.VITE_SOCKET_URL ||
+      import.meta.env.VITE_BACKEND_URL ||
+      window.location.origin;
 
     const s = io(url, {
       withCredentials: true,
