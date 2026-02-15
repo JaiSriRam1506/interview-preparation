@@ -2585,11 +2585,12 @@ const InterviewSession = () => {
     },
     onDisconnect: (info) => {
       try {
-        setElevenClientConnected(false);
         const suppressUntil = Number(
           elevenClientIgnoreDisconnectUntilRef.current || 0
         );
         if (suppressUntil && Date.now() < suppressUntil) return;
+
+        setElevenClientConnected(false);
         const reason =
           info?.reason || info?.message || info?.code || "disconnected";
 
@@ -3896,23 +3897,22 @@ const InterviewSession = () => {
           });
 
           if (effectiveProvider === "elevenlabs_client") {
-            // If ElevenLabs realtime is already connected, do NOT force a reconnect
-            // on Clear. Reconnecting briefly flips the status to Disconnected and
-            // can disturb the live pipeline on some browsers.
-            if (elevenClientConnected && scribeRef.current) {
-              elevenClientBaseRef.current = "";
-              ignoreRealtimeUntilRef.current = Date.now() + 800;
-              return;
-            }
             if (elevenClientConnectInFlightRef.current) return;
             elevenClientConnectInFlightRef.current = true;
-            // Suppress fallback/toasts while we intentionally reconnect.
-            elevenClientIgnoreDisconnectUntilRef.current = Date.now() + 4000;
-            ignoreRealtimeUntilRef.current = Date.now() + 2000;
+            // Clear MUST be perfect. Some ElevenLabs realtime sessions keep server-side
+            // transcript context even after clearTranscripts(). A fast reconnect fully
+            // resets that context, preventing old text from ever re-appearing.
+            // Suppress fallback/toasts/UI flicker while we intentionally reconnect.
+            elevenClientIgnoreDisconnectUntilRef.current = Date.now() + 7000;
+            ignoreRealtimeUntilRef.current = Date.now() + 600;
             elevenClientBaseRef.current = "";
 
             void (async () => {
               try {
+                if (!scribeRef.current) {
+                  scheduleElevenReconnect({ reason: "clear_reconnect", err: null });
+                  return;
+                }
                 await reconnectElevenLabsClientRealtime({
                   api,
                   scribeRef,
@@ -3930,7 +3930,7 @@ const InterviewSession = () => {
                   e?.response?.data?.message ||
                   e?.message ||
                   "ElevenLabs realtime reconnect failed.";
-                fallbackFromElevenLabsClientRealtime({ reason });
+                scheduleElevenReconnect({ reason, err: e });
               } finally {
                 elevenClientConnectInFlightRef.current = false;
               }

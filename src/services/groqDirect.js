@@ -394,7 +394,10 @@ export const requestGroqDirectParakeet = async ({
     "Not a teacher. Not a book. Not AI.\n\n" +
     "PRIORITY:\n" +
     "If any rule breaks → silently fix before answering.\n" +
-    "Keep English simple and natural.\n\n" +
+    "Keep English VERY simple and natural.\n" +
+    "Use A2/B1 level English (easy words).\n" +
+    "Use short sentences. Avoid rare/advanced words.\n" +
+    "Avoid long paragraphs.\n\n" +
     "STYLE:\n" +
     "- First person only.\n" +
     "- Spoken English.\n" +
