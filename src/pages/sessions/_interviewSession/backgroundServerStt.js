@@ -49,6 +49,21 @@ export const startBackgroundServerSttLoopImpl = ({
   if (serverSttDisabledRef.current) return;
   if (continuousWhisperIntervalRef.current) return;
 
+  // Eleven-only mode: when using client-side ElevenLabs realtime, never run server STT.
+  try {
+    const provider = String(sttProviderRef?.current || "").trim().toLowerCase();
+    if (provider === "elevenlabs_client") return;
+  } catch {
+    // ignore
+  }
+
+  try {
+    const backoffUntil = Number(serverSttBackoffUntilRef?.current || 0);
+    if (backoffUntil && Date.now() < backoffUntil) return;
+  } catch {
+    // ignore
+  }
+
   const webSpeechStalled = isWebSpeechLikelyStalled();
   const autoServerLiveListening = !isWebSpeechLiveUsable() || webSpeechStalled;
   const shouldRunBackgroundServerStt =

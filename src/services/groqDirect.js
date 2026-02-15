@@ -242,9 +242,9 @@ export const streamGroqChatCompletion = async ({
   model,
   messages,
   temperature = 1,
-  max_completion_tokens = 8192,
+  max_completion_tokens = 2048,
   top_p = 1,
-  reasoning_effort = "medium",
+  reasoning_effort = "low",
   signal,
   onToken,
 } = {}) => {
@@ -364,6 +364,8 @@ export const requestGroqDirectParakeet = async ({
   signal,
   temperature,
   top_p,
+  max_completion_tokens,
+  reasoning_effort,
   variation,
 } = {}) => {
   const attempt = Math.max(0, Number(variation?.attempt || 0) || 0);
@@ -460,6 +462,18 @@ export const requestGroqDirectParakeet = async ({
         : 0.9;
   const computedTopP = typeof top_p === "number" ? top_p : attempt ? 0.92 : 0.9;
 
+  const computedMaxTokens =
+    typeof max_completion_tokens === "number"
+      ? Math.max(256, Math.floor(max_completion_tokens))
+      : String(model || "").includes("8b")
+        ? 1200
+        : 1600;
+
+  const computedReasoningEffort =
+    typeof reasoning_effort === "string" && reasoning_effort.trim()
+      ? reasoning_effort.trim()
+      : "low";
+
   const runOnce = async ({ forceLowTemp } = {}) => {
     return await streamGroqChatCompletion({
       apiKey,
@@ -470,6 +484,8 @@ export const requestGroqDirectParakeet = async ({
       ],
       temperature: forceLowTemp ? 0.4 : computedTemp,
       top_p: forceLowTemp ? 0.85 : computedTopP,
+      max_completion_tokens: computedMaxTokens,
+      reasoning_effort: computedReasoningEffort,
       onToken,
       signal,
     });
@@ -500,6 +516,8 @@ export const requestGroqDirectParakeet = async ({
       ],
       temperature: 0.35,
       top_p: 0.85,
+      max_completion_tokens: Math.min(1200, computedMaxTokens),
+      reasoning_effort: computedReasoningEffort,
       onToken,
       signal,
     });

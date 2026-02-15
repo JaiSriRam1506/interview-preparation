@@ -153,6 +153,7 @@ const InterviewSession = () => {
   const [srBlocked, setSrBlocked] = useState(false);
   const [socketConnected, setSocketConnected] = useState(false);
   const [elevenClientConnected, setElevenClientConnected] = useState(false);
+  const [elevenClientReconnecting, setElevenClientReconnecting] = useState(false);
 
   // ElevenLabs SDK can sometimes throw an unhandled rejection when closing an
   // already-closed AudioContext. This is benign but noisy; suppress only that case.
@@ -1022,6 +1023,12 @@ const InterviewSession = () => {
     if (!hideExtras) return;
     if (!shouldKeepListeningRef.current) return;
     if (!isRecordingRef.current) return;
+    if (
+      String(sttProviderRef.current || "").trim().toLowerCase() ===
+      "elevenlabs_client"
+    ) {
+      return;
+    }
     if (srListening) return;
     if (!srCanUse) return;
     if (srMicAvailable === false) return;
@@ -1044,6 +1051,12 @@ const InterviewSession = () => {
     if (!hideExtras) return;
     if (!shouldKeepListeningRef.current) return;
     if (!isRecordingRef.current) return;
+    if (
+      String(sttProviderRef.current || "").trim().toLowerCase() ===
+      "elevenlabs_client"
+    ) {
+      return;
+    }
     if (isWebSpeechLiveUsable()) return;
     startBackgroundServerSttLoop();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1099,6 +1112,11 @@ const InterviewSession = () => {
     } catch {
       // ignore
     }
+    try {
+      setElevenClientReconnecting(false);
+    } catch {
+      // ignore
+    }
   };
 
   const scheduleElevenReconnect = ({ reason, err } = {}) => {
@@ -1112,9 +1130,16 @@ const InterviewSession = () => {
     // Avoid duplicate timers.
     if (elevenReconnectTimerRef.current) return true;
 
+    try {
+      setElevenClientReconnecting(true);
+    } catch {
+      // ignore
+    }
+
     const attempt = Math.max(1, (elevenReconnectAttemptsRef.current || 0) + 1);
     elevenReconnectAttemptsRef.current = attempt;
-    const delay = Math.min(8000, 300 * Math.pow(2, attempt - 1));
+    // Keep retrying; cap delay so it remains responsive.
+    const delay = Math.min(30_000, 400 * Math.pow(2, attempt - 1));
 
     elevenReconnectTimerRef.current = setTimeout(async () => {
       elevenReconnectTimerRef.current = null;
@@ -1146,6 +1171,11 @@ const InterviewSession = () => {
         elevenClientFallbackTriggeredRef.current = false;
         elevenClientErrorNotifiedRef.current = false;
         try {
+          setElevenClientReconnecting(false);
+        } catch {
+          // ignore
+        }
+        try {
           toast.dismiss(TOAST_ID_ELEVEN_DISCONNECT);
         } catch {
           // ignore
@@ -1158,17 +1188,24 @@ const InterviewSession = () => {
 
         if (hardFailure) {
           elevenClientDisabledRef.current = true;
-          fallbackFromElevenLabsClientRealtime({ reason, err: e || err });
+          try {
+            setElevenClientReconnecting(false);
+          } catch {
+            // ignore
+          }
+          // Eleven-only: do not switch providers. Stop retrying and show a toast.
+          toast.error(toastMessage || "ElevenLabs failed (hard error)", {
+            id: TOAST_ID_ELEVEN_DISCONNECT,
+          });
           return;
         }
 
-        // Keep retrying automatically a few times; then fall back.
-        if ((elevenReconnectAttemptsRef.current || 0) >= 6) {
-          toast.error(toastMessage || "ElevenLabs disconnected", {
+        // Eleven-only: keep retrying indefinitely. After a few tries, show a toast
+        // but do NOT fall back to any other provider.
+        if ((elevenReconnectAttemptsRef.current || 0) >= 3) {
+          toast.error(toastMessage || "ElevenLabs disconnected — reconnecting…", {
             id: TOAST_ID_ELEVEN_DISCONNECT,
           });
-          fallbackFromElevenLabsClientRealtime({ reason, err: e || err });
-          return;
         }
 
         // Schedule next retry.
@@ -1190,8 +1227,8 @@ const InterviewSession = () => {
         return;
       }
 
-      // Stop any reconnect loop before falling back.
-      clearElevenReconnectTimer();
+      // Eleven-only: don't stop listening and don't switch providers.
+      // Just keep the reconnect loop running.
 
       const now = Date.now();
       if (now - (elevenClientLastFallbackAtRef.current || 0) < 2500) {
@@ -1202,12 +1239,7 @@ const InterviewSession = () => {
       if (elevenClientFallbackTriggeredRef.current) return;
       elevenClientFallbackTriggeredRef.current = true;
 
-      // Stop the underlying mic/WebSocket pipeline immediately.
-      // Otherwise the SDK worker keeps emitting frames and throws
-      // "WebSocket is not connected" repeatedly.
-      shouldKeepListeningRef.current = false;
-      setRecordingState(false);
-      stopElevenLabsClientRealtime();
+      // Keep state as-is; reconnect loop will handle recovery.
       elevenClientBaseRef.current = "";
 
       const { hardFailure, toastMessage } = classifyElevenLabsRealtimeError({
@@ -1215,44 +1247,30 @@ const InterviewSession = () => {
         err,
       });
 
-      if (hardFailure) {
-        elevenClientDisabledRef.current = true;
-      }
-
       if (!elevenClientErrorNotifiedRef.current) {
         elevenClientErrorNotifiedRef.current = true;
         toast.error(toastMessage, { id: TOAST_ID_ELEVEN_DISCONNECT });
       }
 
-      const canUseWebSpeech = srCanUse && srMicAvailable !== false;
-      const fallbackProvider = canUseWebSpeech ? "webspeech" : "groq";
-
-      // IMPORTANT: do NOT change the selected STT provider automatically.
-      // Keep the user's setting (elevenlabs_client) and only apply a runtime fallback.
-      elevenClientRuntimeFallbackRef.current = fallbackProvider;
-
-      shouldKeepListeningRef.current = true;
-
-      // Android: even on HTTPS, starting mic/SR from a disconnect callback is
-      // frequently blocked. Always show a resume hint and arm the next tap/key
-      // as a guaranteed user gesture.
-      try {
-        setNeedsUserGestureResume(true);
-      } catch {
-        // ignore
-      }
-      setListeningText((prev) => prev || "Tap to resume listening…");
+      // Ensure a reconnect attempt is scheduled.
+      scheduleElevenReconnect({ reason, err });
     } catch {
       // ignore
     }
   };
 
   const showMicResumeToast = () => {
+    if (
+      hideExtras &&
+      String(sttProviderRef.current || "").toLowerCase() === "elevenlabs_client"
+    ) {
+      return;
+    }
     const ts = Date.now();
     if (ts - (gestureResumeToastLastAtRef.current || 0) < 5000) return;
     gestureResumeToastLastAtRef.current = ts;
     gestureResumeToastShownRef.current = true;
-    toast.error("Tap anywhere to resume microphone listening.", {
+    toast.error("Microphone paused — trying to resume…", {
       id: TOAST_ID_MIC_RESUME,
     });
   };
@@ -1285,6 +1303,9 @@ const InterviewSession = () => {
       .toLowerCase();
 
     if (selected !== "elevenlabs_client") return selected || "groq";
+
+    // Co-pilot: Eleven-only mode. Never auto-fallback to other providers.
+    if (hideExtras) return "elevenlabs_client";
 
     // If ElevenLabs has fallen back or is disabled, use a runtime-only fallback,
     // but never mutate the selected provider.
@@ -2577,6 +2598,7 @@ const InterviewSession = () => {
     onConnect: () => {
       try {
         setElevenClientConnected(true);
+        setElevenClientReconnecting(false);
         // Reset fallback trigger when a new connection is established.
         elevenClientFallbackTriggeredRef.current = false;
       } catch {
@@ -2786,6 +2808,11 @@ const InterviewSession = () => {
       } catch {
         // ignore
       }
+      try {
+        setElevenClientReconnecting(false);
+      } catch {
+        // ignore
+      }
     }
 
     try {
@@ -2814,11 +2841,29 @@ const InterviewSession = () => {
     }
   }, [session?.settings?.sttProvider, srCanUse, srMicAvailable]);
 
+  // Co-pilot: default to the fastest model for low latency.
+  // Users can still toggle to the smart model with the 8B/120B button.
+  useEffect(() => {
+    if (!hideExtras) return;
+    if (String(quickAiModel || "").trim()) return;
+    try {
+      setQuickAiModel(QUICK_MODEL_FAST);
+    } catch {
+      // ignore
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hideExtras]);
+
   useEffect(() => {
     if (isRecording) return;
     try {
       clearElevenReconnectTimer();
       elevenReconnectAttemptsRef.current = 0;
+    } catch {
+      // ignore
+    }
+    try {
+      setElevenClientReconnecting(false);
     } catch {
       // ignore
     }
@@ -3344,7 +3389,10 @@ const InterviewSession = () => {
         // If AssemblyAI realtime is active, we already have fast transcripts.
         if (
           sttProviderRef.current !== "webspeech" &&
-          sttProviderRef.current !== "assemblyai"
+          sttProviderRef.current !== "assemblyai" &&
+          // Eleven-only: skip slow on-demand server STT refinement.
+          // We already have realtime text and we want instant AI response.
+          sttProviderRef.current !== "elevenlabs_client"
         ) {
           try {
             const refined = await transcribeBufferedAudioForQuestion();
@@ -3444,6 +3492,12 @@ const InterviewSession = () => {
               if (now - lastUiUpdateAt < 60) return;
               lastUiUpdateAt = now;
               aiAnswerRawRef.current = String(full || "");
+              // Show partial text immediately so it doesn't feel stuck.
+              try {
+                setAiAnswer(formatAiAnswerText(aiAnswerRawRef.current));
+              } catch {
+                // ignore
+              }
             },
           });
 
@@ -3839,6 +3893,23 @@ const InterviewSession = () => {
       );
 
       bumpListeningEpoch();
+      // Prevent background server STT from immediately re-transcribing the last few
+      // seconds of pre-clear audio (this is what makes old text re-appear for ~10–15s).
+      try {
+        lastLocalSpeechUpdateAtRef.current = Date.now();
+      } catch {
+        // ignore
+      }
+      try {
+        serverSttBackoffUntilRef.current = Date.now() + 15_000;
+      } catch {
+        // ignore
+      }
+      try {
+        stopBackgroundServerSttLoop();
+      } catch {
+        // ignore
+      }
       forceEmptySeedOnNextSrStartRef.current = true;
       speechBaseTextRef.current = "";
       listeningTextRef.current = "";
@@ -4469,7 +4540,7 @@ const InterviewSession = () => {
         try {
           if (hideExtras) {
             // Avoid a second in-app popup; let the browser permission sheet handle it.
-            setListeningText((prev) => prev || "Tap to enable microphone…");
+            setListeningText((prev) => prev || "Enable microphone…");
             try {
               const perms = navigator?.permissions;
               if (perms?.query) {
@@ -4514,8 +4585,8 @@ const InterviewSession = () => {
               (name === "SecurityError"
                 ? "Microphone blocked by browser security (HTTPS required)."
                 : name === "NotFoundError"
-                  ? "No microphone found. Connect a mic and tap to retry…"
-                  : "Microphone is busy. Close other apps using mic and tap to retry…")
+                  ? "No microphone found. Connect a mic and retry…"
+                  : "Microphone is busy. Close other apps using mic and retry…")
           );
           showMicResumeToast();
         } else {
@@ -4599,6 +4670,15 @@ const InterviewSession = () => {
     const onTranscript = (payload) => {
       try {
         if (String(payload?.sessionId || "") !== String(id)) return;
+        // When using client-side ElevenLabs realtime, ignore any server-side
+        // realtime transcript events to avoid stale/duplicate appends.
+        if (
+          hideExtras &&
+          String(sttProviderRef.current || "").trim().toLowerCase() ===
+            "elevenlabs_client"
+        ) {
+          return;
+        }
         const ignoreUntil = Number(ignoreRealtimeUntilRef.current || 0);
         if (ignoreUntil && Date.now() < ignoreUntil) return;
         const prov = String(payload?.provider || "")
@@ -4608,6 +4688,8 @@ const InterviewSession = () => {
 
         const text = String(payload?.text || "").trim();
         if (!text) return;
+
+        const epoch = Number(listeningEpochRef.current || 0);
 
         lastLocalSpeechUpdateAtRef.current = Date.now();
 
@@ -4628,14 +4710,20 @@ const InterviewSession = () => {
           // Only drive the Listening UI from AssemblyAI when Web Speech isn't usable
           // (e.g., iOS Safari). Otherwise Web Speech remains the instant UI.
           if (!webSpeechUsable) {
-            setListeningText(nextBase.trim());
+            setListeningText((prev) => {
+              if (Number(listeningEpochRef.current || 0) !== epoch) return prev;
+              return nextBase.trim();
+            });
           }
         } else {
           const composed = `${assemblyRtBaseRef.current}${text}`
             .replace(/\s+/g, " ")
             .trim();
           if (!webSpeechUsable) {
-            setListeningText(composed);
+            setListeningText((prev) => {
+              if (Number(listeningEpochRef.current || 0) !== epoch) return prev;
+              return composed;
+            });
           }
         }
       } catch {
@@ -4646,6 +4734,13 @@ const InterviewSession = () => {
     const onError = (payload) => {
       try {
         if (String(payload?.sessionId || "") !== String(id)) return;
+        if (
+          hideExtras &&
+          String(sttProviderRef.current || "").trim().toLowerCase() ===
+            "elevenlabs_client"
+        ) {
+          return;
+        }
         const prov = String(payload?.provider || "")
           .trim()
           .toLowerCase();
@@ -4690,6 +4785,15 @@ const InterviewSession = () => {
     }
     closeEndSessionDialog();
     endSessionMutation.mutate();
+
+    // UX: If the session expired, the user expects OK to exit to Home.
+    if (endSessionDialog.reason === "expired") {
+      try {
+        navigate("/");
+      } catch {
+        // ignore
+      }
+    }
   };
 
   const handleEndSession = () => {
@@ -4767,7 +4871,11 @@ const InterviewSession = () => {
     const sttWsLabel = (() => {
       if (p === "elevenlabs_client") {
         return `${sttLabel} • ElevenLabs: ${
-          elevenClientConnected ? "Connected" : "Disconnected (tap Settings)"
+          elevenClientConnected
+            ? "Connected"
+            : elevenClientReconnecting
+              ? "Reconnecting…"
+              : "Disconnected"
         }`;
       }
 
@@ -4833,6 +4941,8 @@ const InterviewSession = () => {
     enableWsPcmStt,
     showWsPcmDebug,
     wsPcmStatus,
+    elevenClientConnected,
+    elevenClientReconnecting,
     isSessionActive,
   ]);
 
@@ -4996,7 +5106,9 @@ const InterviewSession = () => {
                       return `${sttLabel} • ElevenLabs: ${
                         elevenClientConnected
                           ? "Connected"
-                          : "Disconnected (tap Settings)"
+                          : elevenClientReconnecting
+                            ? "Reconnecting…"
+                            : "Disconnected"
                       }${fallbackNote}`;
                     }
 
@@ -5080,10 +5192,20 @@ const InterviewSession = () => {
                               <span className="text-red-600 dark:text-red-400">
                                 Listening…
                               </span>
+                            ) :
+                              String(session?.settings?.sttProvider || "")
+                                .trim()
+                                .toLowerCase() === "elevenlabs_client" &&
+                              (elevenClientReconnecting ||
+                                (shouldKeepListeningRef.current &&
+                                  !elevenClientConnected)) ? (
+                              <span className="text-red-600 dark:text-red-400">
+                                Reconnecting…
+                              </span>
                             ) : needsUserGestureResume ||
                               (shouldKeepListeningRef.current &&
                                 !String(listeningText || "").trim()) ? (
-                              <span>Tap to resume…</span>
+                              <span>Waiting…</span>
                             ) : (
                               <span>Waiting…</span>
                             )}
