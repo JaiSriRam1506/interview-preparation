@@ -91,16 +91,34 @@ api.interceptors.response.use(
       combinedMessage.includes("limit exceeded") ||
       combinedMessage.includes("exceeded the quota");
 
-    if (isQuotaOrRateLimit) {
-      toast.error("Limit exceeded — quota reached. Try again later.", {
-        id: "quota-exceeded",
-      });
-    }
-
     const originalUrl = original?.url || "";
     const isAuthRefreshCall =
       typeof originalUrl === "string" &&
       originalUrl.includes("/auth/refresh-token");
+
+    const urlLower = String(originalUrl || "").toLowerCase();
+    const isAuthCall = urlLower.includes("/auth/");
+    const isAiCall =
+      urlLower.includes("/ai-answer") ||
+      urlLower.includes("/stt") ||
+      urlLower.includes("/scrape");
+
+    if (isQuotaOrRateLimit) {
+      if (isAuthCall) {
+        // Auth endpoints can be rate-limited (login/refresh). Don't show AI quota wording.
+        toast.error("Too many attempts — please wait and try again.", {
+          id: "auth-rate-limit",
+        });
+      } else if (isAiCall) {
+        toast.error("Limit exceeded — quota reached. Try again later.", {
+          id: "quota-exceeded",
+        });
+      } else {
+        toast.error("Too many requests — please try again later.", {
+          id: "rate-limit",
+        });
+      }
+    }
 
     // Never try to refresh *from* the refresh-token endpoint itself (prevents infinite loop)
     if (status === 401 && original && !original._retry && !isAuthRefreshCall) {
