@@ -196,6 +196,47 @@ const parseInterviewFormatToParakeet = (raw) => {
   };
 };
 
+const splitToSentences = (text) => {
+  const src = normalizeNewlines(text);
+  if (!src.trim()) return [];
+  // Simple sentence splitter; good enough for fallback bullets.
+  return src
+    .replace(/\s+/g, " ")
+    .split(/(?<=[.!?])\s+/)
+    .map((s) => String(s || "").trim())
+    .filter(Boolean);
+};
+
+const ensureMandatoryParakeetFields = (parakeet) => {
+  const pk = parakeet && typeof parakeet === "object" ? { ...parakeet } : {};
+
+  const shortDef = String(pk.short_definition || "").trim();
+  let explanation = String(pk.explanation || pk.detailed_explanation || "").trim();
+  if (!explanation) explanation = shortDef;
+
+  // Bullets are mandatory for the UX; if missing, derive from explanation.
+  let bullets = Array.isArray(pk.bullets) ? pk.bullets : [];
+  bullets = bullets.map((b) => String(b || "").trim()).filter(Boolean);
+  if (bullets.length === 0 && explanation) {
+    const sentences = splitToSentences(explanation);
+    const derived = [];
+    for (const s of sentences) {
+      const clean = s.replace(/^[-•\s]+/, "").trim();
+      if (!clean) continue;
+      if (clean.length < 12) continue;
+      derived.push(clean);
+      if (derived.length >= 4) break;
+    }
+    if (derived.length) bullets = derived;
+  }
+
+  pk.explanation = explanation;
+  pk.detailed_explanation = String(pk.detailed_explanation || explanation).trim() || explanation;
+  pk.bullets = bullets;
+
+  return pk;
+};
+
 export const streamGroqChatCompletion = async ({
   apiKey,
   model,
@@ -341,8 +382,8 @@ export const requestGroqDirectParakeet = async ({
     ?
       "\n\nREGENERATION MODE:\n" +
       `- Attempt: ${attempt}\n` +
-      "- Create a DIFFERENT answer than the previous ones.\n" +
-      "- New structure, different bullets, different code example, different wording.\n" +
+      "- Create a DIFFERENT answer than the previous ones (new angle, new bullets, new code).\n" +
+      "- Keep the SAME required section structure (Short/Detailed/Bullets/Code).\n" +
       "- Do NOT repeat the same bullets/code/phrases.\n"
     : "";
 
@@ -378,6 +419,8 @@ export const requestGroqDirectParakeet = async ({
     "3) Bullet points (only interview-important points)\n" +
     "4) Code example (medium production-level, well commented)\n" +
     "5) Do NOT use Key interview points AND The code shows\n\n" +
+    "CRITICAL: Never output ONLY code. Even if code is requested, you MUST include all sections above.\n" +
+    "CRITICAL: Do NOT start the answer with a code block. Code goes last.\n\n" +
     "BULLETS:\n" +
     "- Each bullet must add new information.\n" +
     "- Focus on production thinking.\n" +
@@ -405,28 +448,101 @@ export const requestGroqDirectParakeet = async ({
         : "")
     : q;
 
+  // Lower temperature improves format adherence on smaller models.
   const computedTemp =
     typeof temperature === "number"
       ? temperature
       : attempt
-        ? Math.min(1.6, 1.0 + attempt * 0.2)
-        : 1.0;
-  const computedTopP = typeof top_p === "number" ? top_p : attempt ? 0.95 : 1;
+        ? Math.min(1.2, 0.9 + attempt * 0.1)
+        : 0.9;
+  const computedTopP = typeof top_p === "number" ? top_p : attempt ? 0.92 : 0.9;
 
-  const content = await streamGroqChatCompletion({
-    apiKey,
-    model,
-    messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userPrompt },
-    ],
-    temperature: computedTemp,
-    top_p: computedTopP,
-    onToken,
-    signal,
-  });
+  const runOnce = async ({ forceLowTemp } = {}) => {
+    return await streamGroqChatCompletion({
+      apiKey,
+      model,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      temperature: forceLowTemp ? 0.4 : computedTemp,
+      top_p: forceLowTemp ? 0.85 : computedTopP,
+      onToken,
+      signal,
+    });
+  };
 
-  const parakeet = parseInterviewFormatToParakeet(content);
+  const runRepair = async ({ priorText } = {}) => {
+    const prior = String(priorText || "").trim();
+    const repairSystem =
+      systemPrompt +
+      "\n\nREPAIR MODE:\n" +
+      "- Your last output missed required sections. Fix it now.\n" +
+      "- You MUST include Detailed explanation and Bullet points.\n" +
+      "- Keep it concise and interview-ready.\n";
+
+    const repairUser =
+      `${q}\n\n` +
+      "Return the full required format with ALL sections.\n" +
+      (prior
+        ? `\nYour previous output (do not repeat verbatim; improve structure):\n\n${prior.slice(0, 2000)}\n`
+        : "");
+
+    return await streamGroqChatCompletion({
+      apiKey,
+      model,
+      messages: [
+        { role: "system", content: repairSystem },
+        { role: "user", content: repairUser },
+      ],
+      temperature: 0.35,
+      top_p: 0.85,
+      onToken,
+      signal,
+    });
+  };
+
+  let content = await runOnce();
+
+  // If the model violates format and returns mostly code, retry once with stricter sampling.
+  const firstParsedRaw = parseInterviewFormatToParakeet(content);
+  const firstParsed = ensureMandatoryParakeetFields(firstParsedRaw);
+  const looksCodeOnly =
+    !String(firstParsedRaw?.short_definition || "").trim() &&
+    !String(firstParsedRaw?.explanation || "").trim() &&
+    (!Array.isArray(firstParsedRaw?.bullets) || firstParsedRaw.bullets.length === 0) &&
+    String(firstParsedRaw?.code_example?.code || "").trim();
+
+  if (looksCodeOnly) {
+    content = await runOnce({ forceLowTemp: true });
+  }
+
+  // Repair pass: if required sections are still missing, ask the model to reformat.
+  let parsedRaw = parseInterviewFormatToParakeet(content);
+  let parakeet = ensureMandatoryParakeetFields(parsedRaw);
+
+  const missingMandatory =
+    !String(parakeet?.explanation || "").trim() ||
+    !Array.isArray(parakeet?.bullets) ||
+    parakeet.bullets.length === 0;
+
+  if (missingMandatory) {
+    const repaired = await runRepair({ priorText: content });
+    parsedRaw = parseInterviewFormatToParakeet(repaired);
+    const repairedPk = ensureMandatoryParakeetFields(parsedRaw);
+    // Preserve code from the original response if repair omitted it.
+    if (
+      !String(repairedPk?.code_example?.code || "").trim() &&
+      String(parakeet?.code_example?.code || "").trim()
+    ) {
+      repairedPk.code_example = parakeet.code_example;
+    }
+    parakeet = repairedPk;
+    content = repaired;
+  }
+
+  // Final hard guarantee (never empty for mandatory fields).
+  parakeet = ensureMandatoryParakeetFields(parakeet);
   return {
     cleaned: q,
     parakeet,

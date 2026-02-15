@@ -308,6 +308,13 @@ const InterviewSession = () => {
   const elevenClientConnectInFlightRef = useRef(false);
   const elevenClientIgnoreDisconnectUntilRef = useRef(0);
   const elevenClientRuntimeFallbackRef = useRef("");
+  const elevenReconnectInFlightRef = useRef(false);
+  const elevenReconnectAttemptsRef = useRef(0);
+  const elevenReconnectTimerRef = useRef(null);
+  // After Clear, ElevenLabs can still deliver a late chunk from the previous utterance.
+  // Guard against re-adding that stale text by ignoring chunks that match the pre-clear tail.
+  const elevenIgnoreUntilDifferentRef = useRef(0);
+  const elevenTailAtClearRef = useRef("");
   const scribeRef = useRef(null);
 
   const [needsUserGestureResume, setNeedsUserGestureResume] = useState(false);
@@ -351,6 +358,44 @@ const InterviewSession = () => {
     String(s || "")
       .replace(/\s+/g, " ")
       .trimStart();
+
+  const stripOverlapPrefix = (baseText, nextChunk) => {
+    const base = normalizeSpeechText(baseText);
+    const chunk = normalizeSpeechText(nextChunk);
+    if (!chunk) return "";
+    if (!base) return chunk;
+
+    const baseLower = base.toLowerCase();
+    const chunkLower = chunk.toLowerCase();
+
+    const max = Math.min(80, baseLower.length, chunkLower.length);
+    // Prefer longer overlaps; ignore tiny overlaps to avoid stripping real new speech.
+    for (let len = max; len >= 12; len -= 1) {
+      const suffix = baseLower.slice(-len);
+      if (chunkLower.startsWith(suffix)) {
+        return chunk.slice(len).trimStart();
+      }
+    }
+    return chunk;
+  };
+
+  const shouldIgnoreElevenChunkAfterClear = (chunkText) => {
+    const until = Number(elevenIgnoreUntilDifferentRef.current || 0);
+    if (!until || Date.now() >= until) return false;
+    const tail = String(elevenTailAtClearRef.current || "").toLowerCase();
+    const c = normalizeSpeechText(chunkText).toLowerCase();
+    if (!tail || !c) return false;
+    // If the incoming chunk exists in the old tail, it's almost certainly stale.
+    // Once we see something that doesn't match the old tail, stop ignoring.
+    if (tail.includes(c)) return true;
+    try {
+      elevenIgnoreUntilDifferentRef.current = 0;
+      elevenTailAtClearRef.current = "";
+    } catch {
+      // ignore
+    }
+    return false;
+  };
 
   useEffect(() => {
     listeningTextRef.current = listeningText;
@@ -963,6 +1008,97 @@ const InterviewSession = () => {
   const stopElevenLabsClientRealtime = () =>
     stopElevenLabsClientRealtimeUtil({ scribeRef });
 
+  const clearElevenReconnectTimer = () => {
+    try {
+      if (elevenReconnectTimerRef.current) {
+        clearTimeout(elevenReconnectTimerRef.current);
+        elevenReconnectTimerRef.current = null;
+      }
+    } catch {
+      // ignore
+    }
+  };
+
+  const scheduleElevenReconnect = ({ reason, err } = {}) => {
+    if (String(sttProviderRef.current || "").toLowerCase() !== "elevenlabs_client") {
+      return false;
+    }
+    if (!shouldKeepListeningRef.current) return false;
+    if (!isRecordingRef.current) return false;
+    if (elevenClientDisabledRef.current) return false;
+
+    // Avoid duplicate timers.
+    if (elevenReconnectTimerRef.current) return true;
+
+    const attempt = Math.max(1, (elevenReconnectAttemptsRef.current || 0) + 1);
+    elevenReconnectAttemptsRef.current = attempt;
+    const delay = Math.min(8000, 300 * Math.pow(2, attempt - 1));
+
+    elevenReconnectTimerRef.current = setTimeout(async () => {
+      elevenReconnectTimerRef.current = null;
+      if (elevenReconnectInFlightRef.current) return;
+      if (String(sttProviderRef.current || "").toLowerCase() !== "elevenlabs_client") return;
+      if (!shouldKeepListeningRef.current) return;
+      if (!isRecordingRef.current) return;
+      if (elevenClientDisabledRef.current) return;
+
+      elevenReconnectInFlightRef.current = true;
+      try {
+        // Suppress disconnect->fallback while we are reconnecting.
+        elevenClientIgnoreDisconnectUntilRef.current = Date.now() + 6000;
+
+        await reconnectElevenLabsClientRealtime({
+          api,
+          scribeRef,
+          elevenLanguageCode,
+          onBeforeReconnect: () => {
+            // Don't let late chunks from the old connection repopulate UI.
+            ignoreRealtimeUntilRef.current = Date.now() + 1500;
+            elevenClientBaseRef.current = "";
+          },
+        });
+
+        // Successful reconnect: clear fallback flags + attempts.
+        elevenReconnectAttemptsRef.current = 0;
+        elevenClientRuntimeFallbackRef.current = "";
+        elevenClientFallbackTriggeredRef.current = false;
+        elevenClientErrorNotifiedRef.current = false;
+        try {
+          toast.dismiss(TOAST_ID_ELEVEN_DISCONNECT);
+        } catch {
+          // ignore
+        }
+      } catch (e) {
+        const { hardFailure, toastMessage } = classifyElevenLabsRealtimeError({
+          reason,
+          err: e || err,
+        });
+
+        if (hardFailure) {
+          elevenClientDisabledRef.current = true;
+          fallbackFromElevenLabsClientRealtime({ reason, err: e || err });
+          return;
+        }
+
+        // Keep retrying automatically a few times; then fall back.
+        if ((elevenReconnectAttemptsRef.current || 0) >= 6) {
+          toast.error(toastMessage || "ElevenLabs disconnected", {
+            id: TOAST_ID_ELEVEN_DISCONNECT,
+          });
+          fallbackFromElevenLabsClientRealtime({ reason, err: e || err });
+          return;
+        }
+
+        // Schedule next retry.
+        scheduleElevenReconnect({ reason, err: e || err });
+      } finally {
+        elevenReconnectInFlightRef.current = false;
+      }
+    }, delay);
+
+    return true;
+  };
+
   const fallbackFromElevenLabsClientRealtime = ({ reason, err } = {}) => {
     try {
       if (
@@ -971,6 +1107,9 @@ const InterviewSession = () => {
       ) {
         return;
       }
+
+      // Stop any reconnect loop before falling back.
+      clearElevenReconnectTimer();
 
       const now = Date.now();
       if (now - (elevenClientLastFallbackAtRef.current || 0) < 2500) {
@@ -2370,7 +2509,12 @@ const InterviewSession = () => {
         if (suppressUntil && Date.now() < suppressUntil) return;
         const reason =
           info?.reason || info?.message || info?.code || "disconnected";
-        fallbackFromElevenLabsClientRealtime({ reason, err: info });
+
+        // Prefer auto-reconnect for transient disconnects.
+        const scheduled = scheduleElevenReconnect({ reason, err: info });
+        if (!scheduled) {
+          fallbackFromElevenLabsClientRealtime({ reason, err: info });
+        }
       } catch {
         // ignore
       }
@@ -2390,9 +2534,16 @@ const InterviewSession = () => {
 
         const partial = String(data?.text || "").trim();
         if (!partial) return;
+        if (shouldIgnoreElevenChunkAfterClear(partial)) return;
         lastLocalSpeechUpdateAtRef.current = Date.now();
+
+        const safePartial = stripOverlapPrefix(
+          elevenClientBaseRef.current,
+          partial
+        );
+        if (!safePartial) return;
         const composed =
-          `${speechBaseTextRef.current}${elevenClientBaseRef.current}${partial}`
+          `${speechBaseTextRef.current}${elevenClientBaseRef.current}${safePartial}`
             .replace(/\s+/g, " ")
             .trimStart();
         setListeningText(composed);
@@ -2415,10 +2566,17 @@ const InterviewSession = () => {
 
         const text = String(data?.text || "").trim();
         if (!text) return;
+        if (shouldIgnoreElevenChunkAfterClear(text)) return;
         lastLocalSpeechUpdateAtRef.current = Date.now();
 
-        elevenClientBaseRef.current =
-          `${elevenClientBaseRef.current}${text} `.replace(/\s+/g, " ");
+        const chunk = `${text} `;
+        const deduped = stripOverlapPrefix(elevenClientBaseRef.current, chunk);
+        if (deduped) {
+          elevenClientBaseRef.current = `${elevenClientBaseRef.current}${deduped}`.replace(
+            /\s+/g,
+            " "
+          );
+        }
 
         // Update Listening with committed base.
         setListeningText(
@@ -2441,7 +2599,10 @@ const InterviewSession = () => {
         if (suppressUntil && Date.now() < suppressUntil) return;
         const reason =
           err?.reason || err?.message || err?.name || "elevenlabs_error";
-        fallbackFromElevenLabsClientRealtime({ reason, err });
+        const scheduled = scheduleElevenReconnect({ reason, err });
+        if (!scheduled) {
+          fallbackFromElevenLabsClientRealtime({ reason, err });
+        }
       } catch {
         // ignore
       }
@@ -2453,6 +2614,7 @@ const InterviewSession = () => {
         );
         if (suppressUntil && Date.now() < suppressUntil) return;
         const reason = err?.reason || err?.message || "quota_exceeded";
+        // Quota is not transient; fall back immediately.
         fallbackFromElevenLabsClientRealtime({ reason, err });
       } catch {
         // ignore
@@ -2465,7 +2627,11 @@ const InterviewSession = () => {
         );
         if (suppressUntil && Date.now() < suppressUntil) return;
         const reason = err?.reason || err?.message || "resource_exhausted";
-        fallbackFromElevenLabsClientRealtime({ reason, err });
+        // Resource exhausted is often transient; try reconnect first.
+        const scheduled = scheduleElevenReconnect({ reason, err });
+        if (!scheduled) {
+          fallbackFromElevenLabsClientRealtime({ reason, err });
+        }
       } catch {
         // ignore
       }
@@ -2520,6 +2686,12 @@ const InterviewSession = () => {
       } catch {
         // ignore
       }
+      try {
+        clearElevenReconnectTimer();
+        elevenReconnectAttemptsRef.current = 0;
+      } catch {
+        // ignore
+      }
     }
 
     try {
@@ -2547,6 +2719,16 @@ const InterviewSession = () => {
       serverSttDisabledRef.current = false;
     }
   }, [session?.settings?.sttProvider, srCanUse, srMicAvailable]);
+
+  useEffect(() => {
+    if (isRecording) return;
+    try {
+      clearElevenReconnectTimer();
+      elevenReconnectAttemptsRef.current = 0;
+    } catch {
+      // ignore
+    }
+  }, [isRecording]);
 
   // Fetch messages
   const { data: messagesData } = useQuery({
@@ -3031,6 +3213,7 @@ const InterviewSession = () => {
 
       if (hideExtras) {
         // Single Q/A only: clear old Question/Answer + Listening immediately on tap.
+        const prevEleven = normalizeSpeechText(elevenClientBaseRef.current || "");
         bumpListeningEpoch();
         setCapturedQuestion("");
         aiAnswerRawRef.current = "";
@@ -3044,6 +3227,8 @@ const InterviewSession = () => {
         elevenClientBaseRef.current = "";
         lastSrFinalCommittedRef.current = "";
         ignoreRealtimeUntilRef.current = Date.now() + 1200;
+        elevenIgnoreUntilDifferentRef.current = Date.now() + 12_000;
+        elevenTailAtClearRef.current = prevEleven.slice(-240);
         try {
           scribeRef.current?.clearTranscripts?.();
         } catch {
@@ -3097,6 +3282,8 @@ const InterviewSession = () => {
         regenAttemptRef.current = 0;
         regenAvoidRef.current = [];
 
+        const prevEleven = normalizeSpeechText(elevenClientBaseRef.current || "");
+
         // Start fresh for the next question: avoid appending old SR text.
         forceEmptySeedOnNextSrStartRef.current = true;
         speechBaseTextRef.current = "";
@@ -3105,6 +3292,8 @@ const InterviewSession = () => {
         elevenClientBaseRef.current = "";
         lastSrFinalCommittedRef.current = "";
         ignoreRealtimeUntilRef.current = Date.now() + 1200;
+        elevenIgnoreUntilDifferentRef.current = Date.now() + 12_000;
+        elevenTailAtClearRef.current = prevEleven.slice(-240);
         try {
           scribeRef.current?.clearTranscripts?.();
         } catch {
@@ -3548,6 +3737,7 @@ const InterviewSession = () => {
     // It should NOT stop listening.
     if (hideExtras) {
       const prevListening = normalizeSpeechText(listeningTextRef.current || "");
+      const prevEleven = normalizeSpeechText(elevenClientBaseRef.current || "");
       const prevSrCombined = normalizeSpeechText(
         `${String(srFinal || "")} ${String(srInterim || "")}`
       );
@@ -3560,6 +3750,11 @@ const InterviewSession = () => {
       elevenClientBaseRef.current = "";
       lastSrFinalCommittedRef.current = "";
       ignoreRealtimeUntilRef.current = Date.now() + 1200;
+
+      // ElevenLabs may emit a late committed chunk after Clear.
+      // Ignore anything matching the old tail for a short window.
+      elevenIgnoreUntilDifferentRef.current = Date.now() + 12_000;
+      elevenTailAtClearRef.current = prevEleven.slice(-240);
 
       // Drop any queued MediaRecorder chunk that may still contain pre-clear audio.
       audioRingIgnoreUntilRef.current = Date.now() + 1500;
@@ -5057,7 +5252,7 @@ const InterviewSession = () => {
                           type="button"
                           onClick={handleGenerateAIAnswer}
                           disabled={isGeneratingAnswer}
-                          className="w-36 sm:w-44 px-3 py-2 rounded-lg bg-gray-900 text-white text-sm font-semibold hover:bg-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                          className="w-28 sm:w-32 px-2.5 py-1.5 rounded-lg bg-gray-900 text-white text-xs sm:text-sm font-semibold hover:bg-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           {isGeneratingAnswer ? "Generating…" : "AI Answer"}
                         </button>
@@ -5202,7 +5397,7 @@ const InterviewSession = () => {
                       type="button"
                       onClick={handleGenerateAIAnswer}
                       disabled={isGeneratingAnswer}
-                      className="w-full px-4 py-3 rounded-lg bg-gray-900 text-white font-semibold hover:bg-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="w-full px-3 py-2 rounded-lg bg-gray-900 text-white text-sm font-semibold hover:bg-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       {isGeneratingAnswer ? "Generating…" : "AI Answer"}
                     </button>
