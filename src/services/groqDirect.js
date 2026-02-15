@@ -213,21 +213,29 @@ export const streamGroqChatCompletion = async ({
   if (!m) throw new Error("model is required");
   const msgArr = Array.isArray(messages) ? messages : [];
 
+  const body = {
+    model: m,
+    messages: msgArr,
+    temperature,
+    max_completion_tokens,
+    top_p,
+    stream: true,
+  };
+
+  // Groq exposes some OpenAI-compatible params, but not every model accepts them.
+  // `reasoning_effort` is relevant for GPT-OSS; omit it for models like Llama.
+  const isGptOss = m.startsWith("openai/") && m.includes("gpt-oss");
+  if (isGptOss && reasoning_effort) {
+    body.reasoning_effort = reasoning_effort;
+  }
+
   const res = await fetch(`${GROQ_OPENAI_BASE_URL}/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${key}`,
     },
-    body: JSON.stringify({
-      model: m,
-      messages: msgArr,
-      temperature,
-      max_completion_tokens,
-      top_p,
-      stream: true,
-      reasoning_effort,
-    }),
+    body: JSON.stringify(body),
     signal,
   });
 
@@ -313,7 +321,31 @@ export const requestGroqDirectParakeet = async ({
   apiKey,
   onToken,
   signal,
+  temperature,
+  top_p,
+  variation,
 } = {}) => {
+  const attempt = Math.max(0, Number(variation?.attempt || 0) || 0);
+  const avoid = Array.isArray(variation?.avoid) ? variation.avoid : [];
+  const avoidText = avoid
+    .map((v) => String(v || "").trim())
+    .filter(Boolean)
+    .slice(-3)
+    .map((v, idx) => {
+      const clipped = v.length > 1400 ? `${v.slice(0, 1400)}…` : v;
+      return `Previous answer ${idx + 1}:\n${clipped}`;
+    })
+    .join("\n\n---\n\n");
+
+  const regenNote = attempt
+    ?
+      "\n\nREGENERATION MODE:\n" +
+      `- Attempt: ${attempt}\n` +
+      "- Create a DIFFERENT answer than the previous ones.\n" +
+      "- New structure, different bullets, different code example, different wording.\n" +
+      "- Do NOT repeat the same bullets/code/phrases.\n"
+    : "";
+
   const systemPrompt =
     "You are the candidate in a LIVE interview for a product company.\n\n" +
     "MISSION:\n" +
@@ -359,19 +391,37 @@ export const requestGroqDirectParakeet = async ({
     "- No decorative formatting.\n\n" +
     "FINAL FEEL:\n" +
     "Answer must feel natural and spoken.\n" +
-    "Interviewer should NOT feel this is memorized or AI-assisted.";
+    "Interviewer should NOT feel this is memorized or AI-assisted." +
+    regenNote;
 
   const q = String(question || "").trim();
   if (!q) throw new Error("question is required");
+
+  const userPrompt = attempt
+    ?
+      `${q}\n\nMake a different answer than the previous ones.\n` +
+      (avoidText
+        ? `\nDO NOT REPEAT these (use a different angle):\n\n${avoidText}`
+        : "")
+    : q;
+
+  const computedTemp =
+    typeof temperature === "number"
+      ? temperature
+      : attempt
+        ? Math.min(1.6, 1.0 + attempt * 0.2)
+        : 1.0;
+  const computedTopP = typeof top_p === "number" ? top_p : attempt ? 0.95 : 1;
 
   const content = await streamGroqChatCompletion({
     apiKey,
     model,
     messages: [
       { role: "system", content: systemPrompt },
-      { role: "user", content: q },
+      { role: "user", content: userPrompt },
     ],
-    stream: true,
+    temperature: computedTemp,
+    top_p: computedTopP,
     onToken,
     signal,
   });

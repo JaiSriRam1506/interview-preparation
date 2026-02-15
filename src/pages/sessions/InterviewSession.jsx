@@ -132,6 +132,13 @@ const InterviewSession = () => {
   const [aiAnswer, setAiAnswer] = useState("");
   const [parakeetAnswer, setParakeetAnswer] = useState(null);
   const [parakeetCleaned, setParakeetCleaned] = useState("");
+
+  // Co-pilot: quick model toggle + regenerate diversity
+  const QUICK_MODEL_SMART = "openai/gpt-oss-120b";
+  const QUICK_MODEL_FAST = "llama-3.1-8b-instant";
+  const [quickAiModel, setQuickAiModel] = useState("");
+  const regenAttemptRef = useRef(0);
+  const regenAvoidRef = useRef([]);
   const [capturedQuestion, setCapturedQuestion] = useState("");
   const [isRecording, setIsRecording] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
@@ -3086,6 +3093,10 @@ const InterviewSession = () => {
       if (hideExtras) {
         setCapturedQuestion(question);
 
+        // New question -> reset regenerate context.
+        regenAttemptRef.current = 0;
+        regenAvoidRef.current = [];
+
         // Start fresh for the next question: avoid appending old SR text.
         forceEmptySeedOnNextSrStartRef.current = true;
         speechBaseTextRef.current = "";
@@ -3126,13 +3137,16 @@ const InterviewSession = () => {
 
       // Direct Groq (no backend) for OSS models when API key is present.
       // Note: this exposes the API key to the browser environment.
-      const selectedModel = String(session?.settings?.aiModel || "").trim();
+      const selectedModel = String(
+        quickAiModel || session?.settings?.aiModel || ""
+      ).trim();
       const groqKey = String(import.meta.env.VITE_GROQ_API_KEY || "").trim();
-      const isGroqOssModel =
+      const isGroqDirectModel =
         selectedModel === "openai/gpt-oss-120b" ||
-        selectedModel === "openai/gpt-oss-20b";
+        selectedModel === "openai/gpt-oss-20b" ||
+        selectedModel === QUICK_MODEL_FAST;
 
-      if (groqKey && isGroqOssModel) {
+      if (groqKey && isGroqDirectModel) {
         try {
           let lastUiUpdateAt = 0;
           const resp = await requestGroqDirectParakeet({
@@ -3159,6 +3173,13 @@ const InterviewSession = () => {
             }
             setParakeetCleaned(String(resp?.cleaned || question).trim());
             setParakeetAnswer(pk);
+            // Store to avoid repetition on subsequent regenerations.
+            try {
+              const raw = String(pk?._raw || "").trim();
+              if (raw) regenAvoidRef.current = [...regenAvoidRef.current, raw].slice(-3);
+            } catch {
+              // ignore
+            }
             inputRef.current?.focus?.();
             return;
           }
@@ -3424,21 +3445,35 @@ const InterviewSession = () => {
     if (!id) return;
     if (!parakeetAnswer) return;
     const cleaned = String(parakeetCleaned || "").trim();
-    if (!cleaned) return;
+    const fallbackQ = String(
+      parakeetAnswer?.verbatim_asr || capturedQuestion || ""
+    ).trim();
+    const questionToUse = cleaned || fallbackQ;
+    if (!questionToUse) return;
 
     setIsGeneratingAnswer(true);
     try {
-      const selectedModel = String(session?.settings?.aiModel || "").trim();
+      const selectedModel = String(
+        quickAiModel || session?.settings?.aiModel || ""
+      ).trim();
       const groqKey = String(import.meta.env.VITE_GROQ_API_KEY || "").trim();
-      const isGroqOssModel =
+      const isGroqDirectModel =
         selectedModel === "openai/gpt-oss-120b" ||
-        selectedModel === "openai/gpt-oss-20b";
+        selectedModel === "openai/gpt-oss-20b" ||
+        selectedModel === QUICK_MODEL_FAST;
 
-      if (groqKey && isGroqOssModel) {
+      if (groqKey && isGroqDirectModel) {
+        const nextAttempt = (regenAttemptRef.current || 0) + 1;
+        regenAttemptRef.current = nextAttempt;
+
         const resp = await requestGroqDirectParakeet({
-          question: cleaned,
+          question: questionToUse,
           model: selectedModel,
           apiKey: groqKey,
+          variation: {
+            attempt: nextAttempt,
+            avoid: regenAvoidRef.current,
+          },
         });
         const pkRaw = resp?.parakeet;
         if (pkRaw && typeof pkRaw === "object") {
@@ -3449,8 +3484,14 @@ const InterviewSession = () => {
           ) {
             pk.detailed_explanation = pk.explanation;
           }
-          setParakeetCleaned(String(resp?.cleaned || cleaned).trim());
+          setParakeetCleaned(String(resp?.cleaned || questionToUse).trim());
           setParakeetAnswer(pk);
+          try {
+            const raw = String(pk?._raw || "").trim();
+            if (raw) regenAvoidRef.current = [...regenAvoidRef.current, raw].slice(-3);
+          } catch {
+            // ignore
+          }
           return;
         }
         throw new Error("Invalid Groq response");
@@ -3458,7 +3499,8 @@ const InterviewSession = () => {
 
       const resp = await requestParakeetAiAnswer({
         sessionId: id,
-        cleaned,
+        question: questionToUse,
+        cleaned: questionToUse,
         rawASR: String(parakeetAnswer?.verbatim_asr || ""),
       });
       const pkRaw = resp?.parakeet;
@@ -3470,7 +3512,7 @@ const InterviewSession = () => {
         ) {
           pk.detailed_explanation = pk.explanation;
         }
-        setParakeetCleaned(String(resp?.cleaned || cleaned).trim());
+        setParakeetCleaned(String(resp?.cleaned || questionToUse).trim());
         setParakeetAnswer(pk);
       } else {
         throw new Error("Invalid Parakeet response");
@@ -5019,6 +5061,70 @@ const InterviewSession = () => {
                         >
                           {isGeneratingAnswer ? "Generating…" : "AI Answer"}
                         </button>
+
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={handleRegenerateParakeet}
+                            disabled={
+                              isGeneratingAnswer ||
+                              !(
+                                parakeetAnswer &&
+                                String(
+                                  parakeetCleaned ||
+                                    parakeetAnswer?.verbatim_asr ||
+                                    capturedQuestion ||
+                                    ""
+                                ).trim()
+                              )
+                            }
+                            className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-sm font-semibold hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                            title="Regenerate answer"
+                          >
+                            Regenerate
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const next =
+                                (quickAiModel || QUICK_MODEL_SMART) ===
+                                QUICK_MODEL_FAST
+                                  ? QUICK_MODEL_SMART
+                                  : QUICK_MODEL_FAST;
+                              setQuickAiModel(next);
+                              // Update header label immediately (local only).
+                              try {
+                                queryClient.setQueryData(["session", id], (old) => {
+                                  if (!old) return old;
+                                  return {
+                                    ...old,
+                                    settings: {
+                                      ...(old.settings || {}),
+                                      aiModel: next,
+                                    },
+                                  };
+                                });
+                              } catch {
+                                // ignore
+                              }
+                            }}
+                            disabled={isGeneratingAnswer}
+                            className="h-9 w-10 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-xs font-bold hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            title={
+                              (quickAiModel || QUICK_MODEL_SMART) ===
+                              QUICK_MODEL_FAST
+                                ? "Switch to GPT-OSS 120B (Smart)"
+                                : "Switch to LLAMA 3.1 8B Instant"
+                            }
+                            aria-label="Toggle AI model"
+                          >
+                            {(quickAiModel || QUICK_MODEL_SMART) ===
+                            QUICK_MODEL_FAST
+                              ? "8B"
+                              : "120B"}
+                          </button>
+                        </div>
 
                         <button
                           type="button"

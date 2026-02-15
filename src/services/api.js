@@ -1,6 +1,7 @@
 import axios from "axios";
 import { getAccessToken, setAccessToken } from "./token";
 import toast from "react-hot-toast";
+import { readPersistedAuth, writePersistedAuth } from "./authStorage";
 
 const resolveBaseUrl = () => {
   const explicit = import.meta.env.VITE_API_URL;
@@ -106,12 +107,36 @@ api.interceptors.response.use(
       original._retry = true;
 
       try {
-        if (!refreshing) refreshing = api.post("/auth/refresh-token");
+        if (!refreshing) {
+          const persisted = readPersistedAuth();
+          const payload = persisted?.refreshToken
+            ? { refreshToken: persisted.refreshToken }
+            : {};
+          refreshing = api.post("/auth/refresh-token", payload);
+        }
         const refreshResponse = await refreshing;
         refreshing = null;
 
         const accessToken = refreshResponse?.data?.accessToken;
-        if (accessToken) setAccessToken(accessToken);
+        if (accessToken) {
+          setAccessToken(accessToken);
+          // Keep persisted auth in sync so refresh survives hard reloads.
+          try {
+            const prev = readPersistedAuth();
+            if (prev?.expiresAt) {
+              writePersistedAuth({
+                accessToken,
+                refreshToken: String(
+                  refreshResponse?.data?.refreshToken || prev?.refreshToken || ""
+                ).trim(),
+                user: refreshResponse?.data?.data?.user || prev?.user || null,
+                expiresAt: prev.expiresAt,
+              });
+            }
+          } catch {
+            // ignore
+          }
+        }
         return api(original);
       } catch (e) {
         refreshing = null;
