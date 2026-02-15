@@ -315,6 +315,7 @@ const InterviewSession = () => {
   // Guard against re-adding that stale text by ignoring chunks that match the pre-clear tail.
   const elevenIgnoreUntilDifferentRef = useRef(0);
   const elevenTailAtClearRef = useRef("");
+  const elevenSnapshotAtClearRef = useRef("");
   const scribeRef = useRef(null);
 
   const [needsUserGestureResume, setNeedsUserGestureResume] = useState(false);
@@ -379,18 +380,99 @@ const InterviewSession = () => {
     return chunk;
   };
 
+  // ElevenLabs sometimes sends a chunk that contains BOTH old (pre-clear) text and new text.
+  // If we simply ignore it, we lose the new speech; if we accept it, old text re-appears.
+  // This sanitizer strips the old prefix portion (best-effort) during a short post-clear window.
+  const sanitizeElevenChunkAfterClear = (chunkText) => {
+    const until = Number(elevenIgnoreUntilDifferentRef.current || 0);
+    const raw = normalizeSpeechText(chunkText);
+    if (!raw) return "";
+    if (!until || Date.now() >= until) return raw;
+
+    const chunkLower = raw.toLowerCase();
+    const snapshot = String(elevenSnapshotAtClearRef.current || "").toLowerCase();
+    const tail = String(elevenTailAtClearRef.current || "").toLowerCase();
+
+    // If the whole chunk is clearly part of the old snapshot, it's stale.
+    if (snapshot && snapshot.includes(chunkLower)) return "";
+
+    const needles = [];
+    if (snapshot) needles.push(snapshot.slice(-140), snapshot.slice(-100), snapshot.slice(-70));
+    if (tail) needles.push(tail.slice(-120), tail.slice(-80), tail.slice(-50));
+
+    for (const needle of needles) {
+      const n = String(needle || "").trim();
+      if (!n) continue;
+      if (n.length < 28) continue;
+      const idx = chunkLower.indexOf(n);
+      if (idx >= 0) {
+        const sliced = raw.slice(idx + n.length).trimStart();
+        if (!sliced) return "";
+        // Once we successfully strip old text and see new speech, stop the special mode.
+        try {
+          elevenIgnoreUntilDifferentRef.current = 0;
+          elevenTailAtClearRef.current = "";
+          elevenSnapshotAtClearRef.current = "";
+        } catch {
+          // ignore
+        }
+        return sliced;
+      }
+    }
+
+    // Nothing matched: treat as new speech and stop the special mode.
+    try {
+      elevenIgnoreUntilDifferentRef.current = 0;
+      elevenTailAtClearRef.current = "";
+      elevenSnapshotAtClearRef.current = "";
+    } catch {
+      // ignore
+    }
+    return raw;
+  };
+
   const shouldIgnoreElevenChunkAfterClear = (chunkText) => {
     const until = Number(elevenIgnoreUntilDifferentRef.current || 0);
     if (!until || Date.now() >= until) return false;
     const tail = String(elevenTailAtClearRef.current || "").toLowerCase();
+    const snapshot = String(elevenSnapshotAtClearRef.current || "").toLowerCase();
     const c = normalizeSpeechText(chunkText).toLowerCase();
-    if (!tail || !c) return false;
-    // If the incoming chunk exists in the old tail, it's almost certainly stale.
-    // Once we see something that doesn't match the old tail, stop ignoring.
-    if (tail.includes(c)) return true;
+    if (!c) return false;
+
+    // Strong stale signals:
+    // - chunk is contained in old snapshot
+    // - chunk contains the old tail (provider re-sends with extra context)
+    if (snapshot && snapshot.includes(c)) return true;
+    if (tail && c.includes(tail.slice(-80))) return true;
+    if (tail && tail.includes(c)) return true;
+
+    // Word-overlap heuristic during the ignore window.
+    // If most of the words are from the old tail, treat as stale.
+    if (tail) {
+      const words = (s) =>
+        String(s || "")
+          .replace(/[^a-z0-9' ]+/g, " ")
+          .split(/\s+/)
+          .map((w) => w.trim())
+          .filter(Boolean);
+
+      const tailWords = words(tail).slice(-18);
+      const chunkWords = words(c).slice(0, 24);
+      if (tailWords.length >= 6 && chunkWords.length >= 6) {
+        const tailSet = new Set(tailWords);
+        let hit = 0;
+        for (const w of chunkWords) {
+          if (tailSet.has(w)) hit += 1;
+        }
+        const ratio = hit / Math.max(1, chunkWords.length);
+        if (ratio >= 0.6) return true;
+      }
+    }
+
     try {
       elevenIgnoreUntilDifferentRef.current = 0;
       elevenTailAtClearRef.current = "";
+      elevenSnapshotAtClearRef.current = "";
     } catch {
       // ignore
     }
@@ -2490,7 +2572,8 @@ const InterviewSession = () => {
   // We keep it inert unless the user selects sttProvider=elevenlabs_client.
   const scribe = useScribe({
     modelId: "scribe_v2_realtime",
-    languageCode: elevenLanguageCode || "en",
+    // Co-pilot mode is English-only for interview stability.
+    languageCode: hideExtras ? "en" : elevenLanguageCode || "en",
     onConnect: () => {
       try {
         setElevenClientConnected(true);
@@ -2521,6 +2604,7 @@ const InterviewSession = () => {
     },
     onPartialTranscript: (data) => {
       try {
+        const epoch = listeningEpochRef.current || 0;
         if (!shouldKeepListeningRef.current) return;
         if (!isRecordingRef.current) return;
         const ignoreUntil = Number(ignoreRealtimeUntilRef.current || 0);
@@ -2532,9 +2616,10 @@ const InterviewSession = () => {
           return;
         }
 
-        const partial = String(data?.text || "").trim();
+        const partialRaw = String(data?.text || "").trim();
+        if (!partialRaw) return;
+        const partial = sanitizeElevenChunkAfterClear(partialRaw);
         if (!partial) return;
-        if (shouldIgnoreElevenChunkAfterClear(partial)) return;
         lastLocalSpeechUpdateAtRef.current = Date.now();
 
         const safePartial = stripOverlapPrefix(
@@ -2546,13 +2631,17 @@ const InterviewSession = () => {
           `${speechBaseTextRef.current}${elevenClientBaseRef.current}${safePartial}`
             .replace(/\s+/g, " ")
             .trimStart();
-        setListeningText(composed);
+        setListeningText((prev) => {
+          if ((listeningEpochRef.current || 0) !== epoch) return prev;
+          return composed;
+        });
       } catch {
         // ignore
       }
     },
     onCommittedTranscript: (data) => {
       try {
+        const epoch = listeningEpochRef.current || 0;
         if (!shouldKeepListeningRef.current) return;
         if (!isRecordingRef.current) return;
         const ignoreUntil = Number(ignoreRealtimeUntilRef.current || 0);
@@ -2564,13 +2653,15 @@ const InterviewSession = () => {
           return;
         }
 
-        const text = String(data?.text || "").trim();
+        const textRaw = String(data?.text || "").trim();
+        if (!textRaw) return;
+        const text = sanitizeElevenChunkAfterClear(textRaw);
         if (!text) return;
-        if (shouldIgnoreElevenChunkAfterClear(text)) return;
         lastLocalSpeechUpdateAtRef.current = Date.now();
 
         const chunk = `${text} `;
         const deduped = stripOverlapPrefix(elevenClientBaseRef.current, chunk);
+        if ((listeningEpochRef.current || 0) !== epoch) return;
         if (deduped) {
           elevenClientBaseRef.current = `${elevenClientBaseRef.current}${deduped}`.replace(
             /\s+/g,
@@ -2579,13 +2670,15 @@ const InterviewSession = () => {
         }
 
         // Update Listening with committed base.
-        setListeningText(
-          `${speechBaseTextRef.current}${elevenClientBaseRef.current}`
+        setListeningText((prev) => {
+          if ((listeningEpochRef.current || 0) !== epoch) return prev;
+          return `${speechBaseTextRef.current}${elevenClientBaseRef.current}`
             .replace(/\s+/g, " ")
-            .trimStart()
-        );
+            .trimStart();
+        });
 
         // Classic mode transcript list + cross-device mirror.
+        if ((listeningEpochRef.current || 0) !== epoch) return;
         pushTranscript(text, "mic", { broadcast: true, isFinal: true });
       } catch {
         // ignore
@@ -3226,9 +3319,10 @@ const InterviewSession = () => {
         assemblyRtBaseRef.current = "";
         elevenClientBaseRef.current = "";
         lastSrFinalCommittedRef.current = "";
-        ignoreRealtimeUntilRef.current = Date.now() + 1200;
+        ignoreRealtimeUntilRef.current = Date.now() + 200;
         elevenIgnoreUntilDifferentRef.current = Date.now() + 12_000;
         elevenTailAtClearRef.current = prevEleven.slice(-240);
+        elevenSnapshotAtClearRef.current = prevEleven.slice(-1000);
         try {
           scribeRef.current?.clearTranscripts?.();
         } catch {
@@ -3291,9 +3385,10 @@ const InterviewSession = () => {
         assemblyRtBaseRef.current = "";
         elevenClientBaseRef.current = "";
         lastSrFinalCommittedRef.current = "";
-        ignoreRealtimeUntilRef.current = Date.now() + 1200;
+        ignoreRealtimeUntilRef.current = Date.now() + 200;
         elevenIgnoreUntilDifferentRef.current = Date.now() + 12_000;
         elevenTailAtClearRef.current = prevEleven.slice(-240);
+        elevenSnapshotAtClearRef.current = prevEleven.slice(-1000);
         try {
           scribeRef.current?.clearTranscripts?.();
         } catch {
@@ -3749,12 +3844,13 @@ const InterviewSession = () => {
       assemblyRtBaseRef.current = "";
       elevenClientBaseRef.current = "";
       lastSrFinalCommittedRef.current = "";
-      ignoreRealtimeUntilRef.current = Date.now() + 1200;
+      ignoreRealtimeUntilRef.current = Date.now() + 200;
 
       // ElevenLabs may emit a late committed chunk after Clear.
       // Ignore anything matching the old tail for a short window.
       elevenIgnoreUntilDifferentRef.current = Date.now() + 12_000;
       elevenTailAtClearRef.current = prevEleven.slice(-240);
+      elevenSnapshotAtClearRef.current = prevEleven.slice(-1000);
 
       // Drop any queued MediaRecorder chunk that may still contain pre-clear audio.
       audioRingIgnoreUntilRef.current = Date.now() + 1500;
