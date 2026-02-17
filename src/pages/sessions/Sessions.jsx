@@ -2,7 +2,7 @@ import React from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../services/api";
-import LoadingSpinner from "../../components/common/LoadingSpinner";
+import Skeleton from "../../components/common/Skeleton";
 import SessionCard from "../../components/sessions/SessionCard";
 import { useAuth } from "../../contexts/AuthContext";
 
@@ -15,7 +15,35 @@ export default function Sessions() {
     enabled: !!userKey,
   });
 
-  if (isLoading) return <LoadingSpinner />;
+  if (isLoading) {
+    return (
+      <div className="p-4 md:p-6">
+        <div className="max-w-5xl mx-auto">
+          <div className="flex items-center justify-between">
+            <Skeleton className="h-8 w-40" rounded="rounded-lg" />
+            <Skeleton className="h-10 w-24" rounded="rounded-lg" />
+          </div>
+
+          <div className="mt-6 grid grid-cols-1 gap-4">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div
+                key={i}
+                className="bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700"
+              >
+                <Skeleton className="h-5 w-64" rounded="rounded-lg" />
+                <Skeleton className="mt-3 h-4 w-40" rounded="rounded-lg" />
+                <div className="mt-4 flex items-center gap-2">
+                  <Skeleton className="h-9 w-28" rounded="rounded-lg" />
+                  <Skeleton className="h-9 w-20" rounded="rounded-lg" />
+                  <Skeleton className="h-9 w-20" rounded="rounded-lg" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const sessions = data?.sessions || data?.data || [];
 

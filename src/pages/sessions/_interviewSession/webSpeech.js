@@ -31,7 +31,6 @@ export const startWebSpeechRecognitionImpl = async (
     srMicAvailable,
     hideExtras,
     message,
-    session,
     SpeechRecognition,
     srReset,
     setSrBlocked,

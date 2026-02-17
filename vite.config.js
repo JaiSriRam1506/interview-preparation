@@ -4,6 +4,9 @@ import react from "@vitejs/plugin-react";
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
+  // Default backend target for local dev.
+  // In this workspace the backend is commonly run on 3000 via `.env`/Render-style setups.
+  // If your backend uses a different port, set `VITE_BACKEND_URL`.
   const backendTarget = env.VITE_BACKEND_URL || "http://localhost:3000";
   const hmrHost = env.VITE_HMR_HOST || "";
 
@@ -11,11 +14,11 @@ export default defineConfig(({ mode }) => {
     // Vite uses node-http-proxy under the hood.
     // ECONNABORTED/ECONNRESET often happen when the browser refreshes or the backend restarts.
     // They are usually harmless but noisy; ignore them.
-    proxy.on("error", (err, _req, _res) => {
+    proxy.on("error", (err) => {
       const code = String(err?.code || "");
       if (code === "ECONNABORTED" || code === "ECONNRESET") return;
       // Keep other errors visible.
-      // eslint-disable-next-line no-console
+
       console.error("proxy error", err);
     });
   };

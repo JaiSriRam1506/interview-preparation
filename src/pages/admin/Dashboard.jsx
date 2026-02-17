@@ -1,7 +1,7 @@
 import React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../services/api";
-import LoadingSpinner from "../../components/common/LoadingSpinner";
+import Skeleton from "../../components/common/Skeleton";
 
 export default function AdminDashboard() {
   const { data, isLoading } = useQuery({
@@ -9,7 +9,26 @@ export default function AdminDashboard() {
     queryFn: async () => (await api.get("/admin/overview")).data,
   });
 
-  if (isLoading) return <LoadingSpinner />;
+  if (isLoading) {
+    return (
+      <div className="p-4 md:p-6">
+        <div className="max-w-4xl mx-auto bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl shadow p-6">
+          <Skeleton className="h-6 w-28" rounded="rounded-lg" />
+          <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+            {Array.from({ length: 2 }).map((_, i) => (
+              <div
+                key={i}
+                className="rounded-xl border border-gray-200 dark:border-gray-800 p-4"
+              >
+                <Skeleton className="h-3 w-16" rounded="rounded-lg" />
+                <Skeleton className="mt-2 h-7 w-20" rounded="rounded-lg" />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-4 md:p-6">

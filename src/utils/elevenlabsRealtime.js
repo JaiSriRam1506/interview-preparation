@@ -58,7 +58,9 @@ const detectTypeFromText = (reasonTextLower) => {
   if (
     r.includes("unauthorized") ||
     r.includes("invalid token") ||
-    r.includes("invalid_token")
+    r.includes("invalid_token") ||
+    r.includes("invalid_api_key") ||
+    r.includes("invalid api key")
   ) {
     return "auth_error";
   }
@@ -88,6 +90,9 @@ export const classifyElevenLabsRealtimeError = ({ reason, err } = {}) => {
   const type = explicitType || detectedType || "";
 
   const insufficientFunds = reasonTextLower.includes("insufficient_funds");
+  const invalidApiKey =
+    reasonTextLower.includes("invalid_api_key") ||
+    reasonTextLower.includes("invalid api key");
 
   const authError =
     type === "auth_error" || reasonTextLower.includes("auth_error");
@@ -114,8 +119,10 @@ export const classifyElevenLabsRealtimeError = ({ reason, err } = {}) => {
 
   const toastMessage = insufficientFunds
     ? "ElevenLabs credits/balance insufficient. Tap to resume listening."
-    : authError
-      ? "ElevenLabs auth/token error. Tap to resume listening."
+    : invalidApiKey
+      ? "Invalid ElevenLabs API key. Update ELEVENLABS_API_KEY and restart the backend."
+      : authError
+        ? "ElevenLabs auth/token error. Tap to resume listening."
       : unacceptedTerms
         ? "ElevenLabs terms not accepted. Tap to resume listening."
         : quotaExceeded

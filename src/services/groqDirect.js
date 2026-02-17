@@ -211,7 +211,9 @@ const ensureMandatoryParakeetFields = (parakeet) => {
   const pk = parakeet && typeof parakeet === "object" ? { ...parakeet } : {};
 
   const shortDef = String(pk.short_definition || "").trim();
-  let explanation = String(pk.explanation || pk.detailed_explanation || "").trim();
+  let explanation = String(
+    pk.explanation || pk.detailed_explanation || ""
+  ).trim();
   if (!explanation) explanation = shortDef;
 
   // Bullets are mandatory for the UX; if missing, derive from explanation.
@@ -231,7 +233,8 @@ const ensureMandatoryParakeetFields = (parakeet) => {
   }
 
   pk.explanation = explanation;
-  pk.detailed_explanation = String(pk.detailed_explanation || explanation).trim() || explanation;
+  pk.detailed_explanation =
+    String(pk.detailed_explanation || explanation).trim() || explanation;
   pk.bullets = bullets;
 
   return pk;
@@ -330,7 +333,7 @@ export const streamGroqChatCompletion = async ({
     }
   };
 
-  while (true) {
+  for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
@@ -381,8 +384,7 @@ export const requestGroqDirectParakeet = async ({
     .join("\n\n---\n\n");
 
   const regenNote = attempt
-    ?
-      "\n\nREGENERATION MODE:\n" +
+    ? "\n\nREGENERATION MODE:\n" +
       `- Attempt: ${attempt}\n` +
       "- Create a DIFFERENT answer than the previous ones (new angle, new bullets, new code).\n" +
       "- Keep the SAME required section structure (Short/Detailed/Bullets/Code).\n" +
@@ -446,8 +448,7 @@ export const requestGroqDirectParakeet = async ({
   if (!q) throw new Error("question is required");
 
   const userPrompt = attempt
-    ?
-      `${q}\n\nMake a different answer than the previous ones.\n` +
+    ? `${q}\n\nMake a different answer than the previous ones.\n` +
       (avoidText
         ? `\nDO NOT REPEAT these (use a different angle):\n\n${avoidText}`
         : "")
@@ -527,11 +528,11 @@ export const requestGroqDirectParakeet = async ({
 
   // If the model violates format and returns mostly code, retry once with stricter sampling.
   const firstParsedRaw = parseInterviewFormatToParakeet(content);
-  const firstParsed = ensureMandatoryParakeetFields(firstParsedRaw);
   const looksCodeOnly =
     !String(firstParsedRaw?.short_definition || "").trim() &&
     !String(firstParsedRaw?.explanation || "").trim() &&
-    (!Array.isArray(firstParsedRaw?.bullets) || firstParsedRaw.bullets.length === 0) &&
+    (!Array.isArray(firstParsedRaw?.bullets) ||
+      firstParsedRaw.bullets.length === 0) &&
     String(firstParsedRaw?.code_example?.code || "").trim();
 
   if (looksCodeOnly) {

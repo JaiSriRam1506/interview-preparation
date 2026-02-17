@@ -1,9 +1,11 @@
 import React from "react";
 import { motion } from "framer-motion";
 
+const MotionDiv = motion.div;
+
 export default function StatsCard({ title, value, icon, color, delay = 0 }) {
   return (
-    <motion.div
+    <MotionDiv
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay }}
@@ -24,6 +26,6 @@ export default function StatsCard({ title, value, icon, color, delay = 0 }) {
           {icon}
         </div>
       </div>
-    </motion.div>
+    </MotionDiv>
   );
 }

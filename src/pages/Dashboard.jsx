@@ -1,5 +1,5 @@
 // src/pages/Dashboard.jsx
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { motion } from "framer-motion";
 import {
   Calendar,
@@ -35,7 +35,9 @@ import { api } from "../services/api";
 import SessionCard from "../components/sessions/SessionCard";
 import QuickActions from "../components/dashboard/QuickActions";
 import StatsCard from "../components/dashboard/StatsCard";
-import LoadingSpinner from "../components/common/LoadingSpinner";
+import Skeleton from "../components/common/Skeleton";
+
+const MotionDiv = motion.div;
 
 const Dashboard = () => {
   const { user } = useAuth();
@@ -43,18 +45,32 @@ const Dashboard = () => {
   const [timeRange, setTimeRange] = useState("week");
 
   // Fetch dashboard data
-  const { data: dashboardData, isLoading } = useQuery({
-    queryKey: ["dashboard", user?.id],
+  const {
+    data: dashboardData,
+    isLoading,
+    dataUpdatedAt,
+    refetch: refetchDashboard,
+    isFetching: isFetchingDashboard,
+  } = useQuery({
+    queryKey: ["dashboard", userKey],
     queryFn: async () => (await api.get("/dashboard")).data,
+    enabled: !!userKey,
   });
 
   // Fetch recent sessions
-  const { data: recentSessions } = useQuery({
+  const {
+    data: recentSessions,
+    refetch: refetchRecentSessions,
+    isFetching: isFetchingRecent,
+  } = useQuery({
     queryKey: ["recentSessions", userKey],
     queryFn: async () =>
       (await api.get("/sessions?limit=5&sort=-createdAt")).data,
     enabled: !!userKey,
   });
+
+  const tokensUsed = Number(dashboardData?.tokensUsed || 0);
+  const totalTimeSeconds = Number(dashboardData?.totalTime || 0);
 
   // Stats data
   const stats = [
@@ -74,14 +90,14 @@ const Dashboard = () => {
     },
     {
       title: "Tokens Used",
-      value: `${(dashboardData?.tokensUsed / 1000).toFixed(1)}K`,
+      value: `${(tokensUsed / 1000).toFixed(1)}K`,
       change: "-3%",
       icon: <Zap className="h-6 w-6" />,
       color: "bg-yellow-500",
     },
     {
       title: "Time Practiced",
-      value: `${Math.floor((dashboardData?.totalTime || 0) / 60)}h`,
+      value: `${Math.floor(totalTimeSeconds / 3600)}h`,
       change: "+18%",
       icon: <Clock className="h-6 w-6" />,
       color: "bg-purple-500",
@@ -108,14 +124,14 @@ const Dashboard = () => {
   ];
 
   if (isLoading) {
-    return <LoadingSpinner />;
+    return <DashboardSkeleton />;
   }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800 p-4 md:p-6">
       <div className="max-w-7xl mx-auto">
         {/* Header */}
-        <motion.div
+        <MotionDiv
           initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}
           className="mb-8"
@@ -128,21 +144,42 @@ const Dashboard = () => {
               <p className="text-gray-600 dark:text-gray-300 mt-2">
                 {format(new Date(), "EEEE, MMMM d, yyyy")}
               </p>
+              {dataUpdatedAt ? (
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  Last updated: {new Date(dataUpdatedAt).toLocaleTimeString()}
+                </p>
+              ) : null}
             </div>
             <div className="mt-4 md:mt-0">
-              <Link
-                to="/sessions/create"
-                className="inline-flex items-center px-6 py-3 bg-gradient-to-r from-primary-600 to-primary-700 text-white font-semibold rounded-lg hover:from-primary-700 hover:to-primary-800 transition-all duration-200 shadow-lg hover:shadow-xl"
-              >
-                <Plus className="h-5 w-5 mr-2" />
-                New Interview Session
-              </Link>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    refetchDashboard();
+                    refetchRecentSessions();
+                  }}
+                  className="inline-flex items-center px-4 py-3 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 text-gray-900 dark:text-white font-semibold rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+                  disabled={isFetchingDashboard || isFetchingRecent}
+                >
+                  {isFetchingDashboard || isFetchingRecent
+                    ? "Refreshing…"
+                    : "Refresh"}
+                </button>
+
+                <Link
+                  to="/sessions/create"
+                  className="inline-flex items-center px-6 py-3 bg-gradient-to-r from-primary-600 to-primary-700 text-white font-semibold rounded-lg hover:from-primary-700 hover:to-primary-800 transition-all duration-200 shadow-lg hover:shadow-xl"
+                >
+                  <Plus className="h-5 w-5 mr-2" />
+                  New Interview Session
+                </Link>
+              </div>
             </div>
           </div>
-        </motion.div>
+        </MotionDiv>
 
         {/* Stats Grid */}
-        <motion.div
+        <MotionDiv
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ delay: 0.1 }}
@@ -151,14 +188,14 @@ const Dashboard = () => {
           {stats.map((stat, index) => (
             <StatsCard key={index} {...stat} delay={index * 0.1} />
           ))}
-        </motion.div>
+        </MotionDiv>
 
         {/* Main Content Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Left Column - Performance Charts */}
           <div className="lg:col-span-2 space-y-6">
             {/* Performance Chart */}
-            <motion.div
+            <MotionDiv
               initial={{ opacity: 0, x: -20 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ delay: 0.2 }}
@@ -225,10 +262,10 @@ const Dashboard = () => {
                   </LineChart>
                 </ResponsiveContainer>
               </div>
-            </motion.div>
+            </MotionDiv>
 
             {/* Skills Radar */}
-            <motion.div
+            <MotionDiv
               initial={{ opacity: 0, x: -20 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ delay: 0.3 }}
@@ -268,7 +305,7 @@ const Dashboard = () => {
                   </PieChart>
                 </ResponsiveContainer>
               </div>
-            </motion.div>
+            </MotionDiv>
           </div>
 
           {/* Right Column - Quick Actions & Recent Sessions */}
@@ -277,7 +314,7 @@ const Dashboard = () => {
             <QuickActions />
 
             {/* Recent Sessions */}
-            <motion.div
+            <MotionDiv
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ delay: 0.4 }}
@@ -311,7 +348,7 @@ const Dashboard = () => {
                   </div>
                 )}
               </div>
-            </motion.div>
+            </MotionDiv>
           </div>
         </div>
       </div>
@@ -320,3 +357,94 @@ const Dashboard = () => {
 };
 
 export default Dashboard;
+
+function DashboardSkeleton() {
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800 p-4 md:p-6">
+      <div className="max-w-7xl mx-auto">
+        <div className="mb-8">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="flex-1">
+              <Skeleton className="h-9 w-72" rounded="rounded-lg" />
+              <Skeleton className="mt-3 h-4 w-52" rounded="rounded-lg" />
+              <Skeleton className="mt-2 h-3 w-36" rounded="rounded-lg" />
+            </div>
+            <div className="flex items-center gap-2">
+              <Skeleton className="h-12 w-24" rounded="rounded-lg" />
+              <Skeleton className="h-12 w-56" rounded="rounded-lg" />
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div
+              key={i}
+              className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-6 border border-gray-200/70 dark:border-gray-700/60"
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex-1">
+                  <Skeleton className="h-3 w-24" rounded="rounded-lg" />
+                  <Skeleton className="mt-3 h-7 w-16" rounded="rounded-lg" />
+                  <Skeleton className="mt-3 h-3 w-14" rounded="rounded-lg" />
+                </div>
+                <Skeleton className="h-12 w-12" rounded="rounded-xl" />
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-2 space-y-6">
+            <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-6">
+              <div className="flex items-center justify-between mb-6">
+                <div>
+                  <Skeleton className="h-5 w-44" rounded="rounded-lg" />
+                  <Skeleton className="mt-2 h-4 w-56" rounded="rounded-lg" />
+                </div>
+                <div className="flex gap-2">
+                  <Skeleton className="h-7 w-16" rounded="rounded-full" />
+                  <Skeleton className="h-7 w-16" rounded="rounded-full" />
+                  <Skeleton className="h-7 w-16" rounded="rounded-full" />
+                </div>
+              </div>
+              <Skeleton className="h-80 w-full" rounded="rounded-xl" />
+            </div>
+
+            <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-6">
+              <Skeleton className="h-5 w-40" rounded="rounded-lg" />
+              <Skeleton className="mt-6 h-80 w-full" rounded="rounded-xl" />
+            </div>
+          </div>
+
+          <div className="space-y-6">
+            <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-6">
+              <Skeleton className="h-5 w-28" rounded="rounded-lg" />
+              <Skeleton className="mt-4 h-11 w-full" rounded="rounded-xl" />
+              <Skeleton className="mt-3 h-11 w-full" rounded="rounded-xl" />
+            </div>
+
+            <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-6">
+              <div className="flex items-center justify-between mb-6">
+                <Skeleton className="h-5 w-36" rounded="rounded-lg" />
+                <Skeleton className="h-4 w-16" rounded="rounded-lg" />
+              </div>
+              <div className="space-y-4">
+                {Array.from({ length: 3 }).map((_, i) => (
+                  <div
+                    key={i}
+                    className="rounded-xl border border-gray-200 dark:border-gray-700 p-4"
+                  >
+                    <Skeleton className="h-4 w-40" rounded="rounded-lg" />
+                    <Skeleton className="mt-2 h-3 w-24" rounded="rounded-lg" />
+                    <Skeleton className="mt-4 h-9 w-28" rounded="rounded-lg" />
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

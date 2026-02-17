@@ -11,6 +11,14 @@ const resolveBaseUrl = () => {
   // (critical for ngrok + iOS, where `localhost` would point to the phone itself).
   const defaultRelative = "/api/v1";
 
+  // In local development, always prefer same-origin `/api/v1` so Vite's proxy
+  // can handle routing to `VITE_BACKEND_URL` without browser CORS preflights.
+  if (import.meta.env.DEV) {
+    if (!explicit) return defaultRelative;
+    if (String(explicit).trim().startsWith("/")) return explicit;
+    // If explicit is a full URL in dev, keep existing behavior.
+  }
+
   if (!explicit) {
     const b = String(backendUrl || "").trim();
     if (!b) return defaultRelative;

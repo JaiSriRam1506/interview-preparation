@@ -43,34 +43,46 @@ export default function ConnectModal({
   const initial = useMemo(() => {
     const persisted = readPersistedStt();
 
+    const allowedAiModels = new Set([
+      "openai/gpt-oss-120b",
+      "llama-3.1-8b-instant",
+    ]);
+
+    const language = session?.settings?.language || "english";
+    const aiModelRaw = session?.settings?.aiModel || DEFAULT_AI_MODEL;
+    const aiModel = allowedAiModels.has(aiModelRaw)
+      ? aiModelRaw
+      : DEFAULT_AI_MODEL;
+
     const providerRaw =
       session?.settings?.sttProvider ||
       persisted.sttProvider ||
       DEFAULT_STT_PROVIDER;
-    const provider = String(providerRaw || "")
+    const modelRaw =
+      session?.settings?.sttModel || persisted.sttModel || DEFAULT_STT_MODEL;
+
+    const sttProviderKey = String(providerRaw || "")
       .trim()
       .toLowerCase();
+    const sttModelKey = String(modelRaw || "").trim();
 
-    const modelFromSession = String(session?.settings?.sttModel || "").trim();
-    const modelFromPersisted = String(persisted.sttModel || "").trim();
+    const sttProvider =
+      sttProviderKey === DEFAULT_STT_PROVIDER
+        ? sttProviderKey
+        : DEFAULT_STT_PROVIDER;
+    const sttModel =
+      sttProviderKey === DEFAULT_STT_PROVIDER && sttModelKey
+        ? sttModelKey
+        : DEFAULT_STT_MODEL;
 
-    const fallbackModel =
-      provider === "openai"
-        ? "whisper-1"
-        : provider === "elevenlabs_client"
-          ? DEFAULT_STT_MODEL
-          : provider === "elevenlabs"
-            ? "scribe_v2"
-            : provider === "groq"
-              ? "whisper-large-v3-turbo"
-              : "";
+    const simpleLanguage = !!session?.settings?.simpleLanguage;
 
     return {
-      language: session?.settings?.language || "english",
-      aiModel: session?.settings?.aiModel || DEFAULT_AI_MODEL,
-      sttProvider: provider || DEFAULT_STT_PROVIDER,
-      sttModel: modelFromSession || modelFromPersisted || fallbackModel,
-      simpleLanguage: true,
+      language,
+      aiModel,
+      sttProvider,
+      sttModel,
+      simpleLanguage,
     };
   }, [session]);
 
@@ -209,26 +221,9 @@ export default function ConnectModal({
                 onChange={(e) => onChangeStt(e.target.value)}
                 className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white"
               >
-                <option value="assemblyai|">AssemblyAI</option>
                 <option value="elevenlabs_client|scribe_v2_realtime">
                   ElevenLabs — Scribe v2 Realtime (client)
                 </option>
-                <option value="elevenlabs|scribe_v2">
-                  ElevenLabs — Scribe v2
-                </option>
-                <option value="elevenlabs|scribe_v1">
-                  ElevenLabs — Scribe v1
-                </option>
-                <option value="openai|whisper-1">OpenAI — whisper-1</option>
-                <option value="groq|whisper-large-v3">
-                  Groq — whisper-large-v3
-                </option>
-                <option value="groq|whisper-large-v3-turbo">
-                  Groq — whisper-large-v3-turbo
-                </option>
-                <option value="webspeech|">Web Speech API (browser)</option>
-                <option value="deepspeech|">Mozilla DeepSpeech (local)</option>
-                <option value="fasterwhisper|">faster-whisper (local)</option>
               </select>
             </div>
           </div>

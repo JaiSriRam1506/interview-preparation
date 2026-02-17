@@ -1,3 +1,5 @@
+/* global sampleRate */
+
 class DownsampleVADProcessor extends AudioWorkletProcessor {
   constructor() {
     super();

@@ -13,8 +13,12 @@ export default function Register() {
   } = useForm();
 
   const onSubmit = async (values) => {
-    await signup(values.name, values.email, values.password);
-    navigate("/dashboard");
+    try {
+      await signup(values.name, values.email, values.password);
+      navigate("/dashboard");
+    } catch {
+      // Error toast is handled in AuthContext.
+    }
   };
 
   return (

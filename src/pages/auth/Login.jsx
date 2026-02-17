@@ -13,8 +13,12 @@ export default function Login() {
   } = useForm();
 
   const onSubmit = async (values) => {
-    await login(values.email, values.password);
-    navigate("/dashboard");
+    try {
+      await login(values.email, values.password);
+      navigate("/dashboard");
+    } catch {
+      // Error toast is handled in AuthContext.
+    }
   };
 
   return (
