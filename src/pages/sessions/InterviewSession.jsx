@@ -457,7 +457,7 @@ const InterviewSession = () => {
 
       const now = Date.now();
       const lastAt = Number(elevenClearReconnectLastAtRef.current || 0);
-      if (now - lastAt < 2000) return;
+      if (now - lastAt < 1500) return;
       elevenClearReconnectLastAtRef.current = now;
 
       elevenClearReconnectInFlightRef.current = true;
@@ -468,7 +468,7 @@ const InterviewSession = () => {
         scribeRef,
         elevenLanguageCode,
         onBeforeReconnect: () => {
-          ignoreRealtimeUntilRef.current = Date.now() + 1500;
+          ignoreRealtimeUntilRef.current = Date.now() + 1000;
           elevenClientBaseRef.current = "";
         },
       })
@@ -506,13 +506,36 @@ const InterviewSession = () => {
     resetAnswerState({ clearParakeet: Boolean(clearParakeet) });
   };
 
+  const shouldFocusListeningInput = () => {
+    try {
+      // Mobile browsers open the on-screen keyboard on focus.
+      // Avoid that for Clear/reset actions.
+      if (typeof window !== "undefined" && window.matchMedia) {
+        if (window.matchMedia("(pointer: coarse)").matches) return false;
+        if (window.matchMedia("(hover: none)").matches) return false;
+      }
+    } catch {
+      // ignore
+    }
+    try {
+      if (typeof navigator !== "undefined") {
+        if (Number(navigator.maxTouchPoints || 0) > 0) return false;
+      }
+    } catch {
+      // ignore
+    }
+    return true;
+  };
+
   const handleClearCapture = () => {
     // Co-pilot UX: Clear should only reset captured question/transcription.
     // It should NOT stop listening.
 
     clearCaptureState({ clearParakeet: false });
 
-    safe(() => listeningInputRef.current?.focus?.());
+    if (shouldFocusListeningInput()) {
+      safe(() => listeningInputRef.current?.focus?.());
+    }
   };
 
   // ==============================
@@ -1277,6 +1300,7 @@ const InterviewSession = () => {
 
   // Focus listening input on mount
   useEffect(() => {
+    if (!shouldFocusListeningInput()) return;
     listeningInputRef.current?.focus?.();
   }, []);
 
