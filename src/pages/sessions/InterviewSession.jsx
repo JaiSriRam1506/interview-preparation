@@ -85,6 +85,7 @@ const InterviewSession = () => {
   const [showEvaluation, setShowEvaluation] = useState(false);
   const [transcriptItems, setTranscriptItems] = useState([]);
   const [isGeneratingAnswer, setIsGeneratingAnswer] = useState(false);
+  const isGeneratingAnswerRef = useRef(false);
   const [connectOpen, setConnectOpen] = useState(false);
   const [elevenClientConnected, setElevenClientConnected] = useState(false);
   const [elevenClientReconnecting, setElevenClientReconnecting] =
@@ -1419,7 +1420,9 @@ const InterviewSession = () => {
   };
 
   const handleGenerateAIAnswer = async () => {
-    if (isGeneratingAnswer) return;
+    // Use a ref (sync) guard instead of state (async) to avoid double-trigger.
+    if (isGeneratingAnswerRef.current) return;
+    isGeneratingAnswerRef.current = true;
     setIsGeneratingAnswer(true);
 
     const wasRecording = !!isRecordingRef.current;
@@ -1482,23 +1485,12 @@ const InterviewSession = () => {
 
       if (groqKey && isGroqDirectModel) {
         try {
-          let lastUiUpdateAt = 0;
           const resp = await requestGroqDirectParakeet({
             question,
             model: selectedModel,
             apiKey: groqKey,
             onToken: (_tok, full) => {
-              // Keep UI responsive on mobile.
-              const now = Date.now();
-              if (now - lastUiUpdateAt < 60) return;
-              lastUiUpdateAt = now;
               aiAnswerRawRef.current = String(full || "");
-              // Show partial text immediately so it doesn't feel stuck.
-              try {
-                setAiAnswer(formatAiAnswerText(aiAnswerRawRef.current));
-              } catch {
-                // ignore
-              }
             },
           });
 
@@ -1565,6 +1557,17 @@ const InterviewSession = () => {
           throw new Error("Invalid Groq response");
         } catch (e) {
           // If direct Groq fails (CORS/quota/etc), fall back to backend flow.
+          // IMPORTANT: clear any partial tokens so fallback output doesn't get mixed.
+          try {
+            aiAnswerRawRef.current = "";
+          } catch {
+            // ignore
+          }
+          try {
+            setAiAnswer("");
+          } catch {
+            // ignore
+          }
 
           const _ = e;
         }
@@ -1779,7 +1782,8 @@ const InterviewSession = () => {
 
                 // Throttle UI updates to keep mobile smooth.
                 const now = Date.now();
-                if (now - lastUiUpdateAt > 60) {
+                // Reduce flicker: update UI at most ~4x/sec.
+                if (now - lastUiUpdateAt > 250) {
                   lastUiUpdateAt = now;
                   flushUi();
                 }
@@ -1838,6 +1842,7 @@ const InterviewSession = () => {
       }
     } finally {
       setIsGeneratingAnswer(false);
+      isGeneratingAnswerRef.current = false;
 
       // Resume live Listening after AI Answer.
       if (wasRecording && shouldKeepListeningRef.current) {
@@ -1852,7 +1857,7 @@ const InterviewSession = () => {
   };
 
   const handleRegenerateParakeet = async () => {
-    if (isGeneratingAnswer) return;
+    if (isGeneratingAnswerRef.current) return;
     if (!id) return;
     if (!parakeetAnswer) return;
     const cleaned = String(parakeetCleaned || "").trim();
@@ -1862,6 +1867,7 @@ const InterviewSession = () => {
     const questionToUse = cleaned || fallbackQ;
     if (!questionToUse) return;
 
+    isGeneratingAnswerRef.current = true;
     setIsGeneratingAnswer(true);
     try {
       const selectedModel = String(
@@ -1952,6 +1958,7 @@ const InterviewSession = () => {
       }
     } finally {
       setIsGeneratingAnswer(false);
+      isGeneratingAnswerRef.current = false;
     }
   };
 
