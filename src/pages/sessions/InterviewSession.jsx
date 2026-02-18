@@ -157,7 +157,8 @@ const InterviewSession = () => {
   const [srBlocked, setSrBlocked] = useState(false);
   const [socketConnected, setSocketConnected] = useState(false);
   const [elevenClientConnected, setElevenClientConnected] = useState(false);
-  const [elevenClientReconnecting, setElevenClientReconnecting] = useState(false);
+  const [elevenClientReconnecting, setElevenClientReconnecting] =
+    useState(false);
 
   // ElevenLabs SDK can sometimes throw an unhandled rejection when closing an
   // already-closed AudioContext. This is benign but noisy; suppress only that case.
@@ -395,14 +396,21 @@ const InterviewSession = () => {
     if (!until || Date.now() >= until) return raw;
 
     const chunkLower = raw.toLowerCase();
-    const snapshot = String(elevenSnapshotAtClearRef.current || "").toLowerCase();
+    const snapshot = String(
+      elevenSnapshotAtClearRef.current || ""
+    ).toLowerCase();
     const tail = String(elevenTailAtClearRef.current || "").toLowerCase();
 
     // If the whole chunk is clearly part of the old snapshot, it's stale.
     if (snapshot && snapshot.includes(chunkLower)) return "";
 
     const needles = [];
-    if (snapshot) needles.push(snapshot.slice(-140), snapshot.slice(-100), snapshot.slice(-70));
+    if (snapshot)
+      needles.push(
+        snapshot.slice(-140),
+        snapshot.slice(-100),
+        snapshot.slice(-70)
+      );
     if (tail) needles.push(tail.slice(-120), tail.slice(-80), tail.slice(-50));
 
     for (const needle of needles) {
@@ -440,7 +448,9 @@ const InterviewSession = () => {
     const until = Number(elevenIgnoreUntilDifferentRef.current || 0);
     if (!until || Date.now() >= until) return false;
     const tail = String(elevenTailAtClearRef.current || "").toLowerCase();
-    const snapshot = String(elevenSnapshotAtClearRef.current || "").toLowerCase();
+    const snapshot = String(
+      elevenSnapshotAtClearRef.current || ""
+    ).toLowerCase();
     const c = normalizeSpeechText(chunkText).toLowerCase();
     if (!c) return false;
 
@@ -1028,8 +1038,9 @@ const InterviewSession = () => {
     if (!shouldKeepListeningRef.current) return;
     if (!isRecordingRef.current) return;
     if (
-      String(sttProviderRef.current || "").trim().toLowerCase() ===
-      "elevenlabs_client"
+      String(sttProviderRef.current || "")
+        .trim()
+        .toLowerCase() === "elevenlabs_client"
     ) {
       return;
     }
@@ -1056,8 +1067,9 @@ const InterviewSession = () => {
     if (!shouldKeepListeningRef.current) return;
     if (!isRecordingRef.current) return;
     if (
-      String(sttProviderRef.current || "").trim().toLowerCase() ===
-      "elevenlabs_client"
+      String(sttProviderRef.current || "")
+        .trim()
+        .toLowerCase() === "elevenlabs_client"
     ) {
       return;
     }
@@ -1124,7 +1136,9 @@ const InterviewSession = () => {
   };
 
   const scheduleElevenReconnect = ({ reason, err } = {}) => {
-    if (String(sttProviderRef.current || "").toLowerCase() !== "elevenlabs_client") {
+    if (
+      String(sttProviderRef.current || "").toLowerCase() !== "elevenlabs_client"
+    ) {
       return false;
     }
     if (!shouldKeepListeningRef.current) return false;
@@ -1148,7 +1162,11 @@ const InterviewSession = () => {
     elevenReconnectTimerRef.current = setTimeout(async () => {
       elevenReconnectTimerRef.current = null;
       if (elevenReconnectInFlightRef.current) return;
-      if (String(sttProviderRef.current || "").toLowerCase() !== "elevenlabs_client") return;
+      if (
+        String(sttProviderRef.current || "").toLowerCase() !==
+        "elevenlabs_client"
+      )
+        return;
       if (!shouldKeepListeningRef.current) return;
       if (!isRecordingRef.current) return;
       if (elevenClientDisabledRef.current) return;
@@ -1207,9 +1225,12 @@ const InterviewSession = () => {
         // Eleven-only: keep retrying indefinitely. After a few tries, show a toast
         // but do NOT fall back to any other provider.
         if ((elevenReconnectAttemptsRef.current || 0) >= 3) {
-          toast.error(toastMessage || "ElevenLabs disconnected — reconnecting…", {
-            id: TOAST_ID_ELEVEN_DISCONNECT,
-          });
+          toast.error(
+            toastMessage || "ElevenLabs disconnected — reconnecting…",
+            {
+              id: TOAST_ID_ELEVEN_DISCONNECT,
+            }
+          );
         }
 
         // Schedule next retry.
@@ -2286,7 +2307,9 @@ const InterviewSession = () => {
   };
 
   const renderMultilineRich = (value) => {
-    const text = String(value || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    const text = String(value || "")
+      .replace(/\r\n/g, "\n")
+      .replace(/\r/g, "\n");
     if (!text.trim()) return null;
     const lines = text.split("\n");
     return (
@@ -2296,7 +2319,10 @@ const InterviewSession = () => {
             return <div key={`br-${idx}`} className="h-2" />;
           }
           return (
-            <div key={`ln-${idx}`} className="leading-relaxed whitespace-pre-wrap">
+            <div
+              key={`ln-${idx}`}
+              className="leading-relaxed whitespace-pre-wrap"
+            >
               {renderInlineRich(line)}
             </div>
           );
@@ -2425,13 +2451,18 @@ const InterviewSession = () => {
         const lower = ident.toLowerCase();
 
         if (ident.startsWith("$")) {
-          pushSpan("font-semibold text-primary-700 dark:text-primary-300", ident);
+          pushSpan(
+            "font-semibold text-primary-700 dark:text-primary-300",
+            ident
+          );
         } else if (jsKeywords.has(lower)) {
           pushSpan("font-semibold text-blue-700 dark:text-blue-300", ident);
         } else if (literals.has(lower)) {
           pushSpan("font-semibold text-purple-700 dark:text-purple-300", ident);
         } else {
-          nodes.push(<React.Fragment key={`raw-${key++}`}>{ident}</React.Fragment>);
+          nodes.push(
+            <React.Fragment key={`raw-${key++}`}>{ident}</React.Fragment>
+          );
         }
 
         i = j;
@@ -2690,10 +2721,8 @@ const InterviewSession = () => {
         const deduped = stripOverlapPrefix(elevenClientBaseRef.current, chunk);
         if ((listeningEpochRef.current || 0) !== epoch) return;
         if (deduped) {
-          elevenClientBaseRef.current = `${elevenClientBaseRef.current}${deduped}`.replace(
-            /\s+/g,
-            " "
-          );
+          elevenClientBaseRef.current =
+            `${elevenClientBaseRef.current}${deduped}`.replace(/\s+/g, " ");
         }
 
         // Update Listening with committed base.
@@ -3239,7 +3268,9 @@ const InterviewSession = () => {
 
             // If the user previously denied mic access, guide them via browser settings.
             if (status?.state === "denied") {
-              setListeningText((prev) => prev || "Microphone permission denied.");
+              setListeningText(
+                (prev) => prev || "Microphone permission denied."
+              );
               toast.error(
                 "Microphone permission denied. Enable it in browser settings and reload."
               );
@@ -3376,7 +3407,9 @@ const InterviewSession = () => {
 
       if (hideExtras) {
         // Single Q/A only: clear old Question/Answer + Listening immediately on tap.
-        const prevEleven = normalizeSpeechText(elevenClientBaseRef.current || "");
+        const prevEleven = normalizeSpeechText(
+          elevenClientBaseRef.current || ""
+        );
         bumpListeningEpoch();
         setCapturedQuestion("");
         aiAnswerRawRef.current = "";
@@ -3449,7 +3482,9 @@ const InterviewSession = () => {
         regenAttemptRef.current = 0;
         regenAvoidRef.current = [];
 
-        const prevEleven = normalizeSpeechText(elevenClientBaseRef.current || "");
+        const prevEleven = normalizeSpeechText(
+          elevenClientBaseRef.current || ""
+        );
 
         // Start fresh for the next question: avoid appending old SR text.
         forceEmptySeedOnNextSrStartRef.current = true;
@@ -3548,7 +3583,10 @@ const InterviewSession = () => {
             // Store to avoid repetition on subsequent regenerations.
             try {
               const raw = String(pk?._raw || "").trim();
-              if (raw) regenAvoidRef.current = [...regenAvoidRef.current, raw].slice(-3);
+              if (raw)
+                regenAvoidRef.current = [...regenAvoidRef.current, raw].slice(
+                  -3
+                );
             } catch {
               // ignore
             }
@@ -3912,7 +3950,8 @@ const InterviewSession = () => {
           setParakeetAnswer(pk);
           try {
             const raw = String(pk?._raw || "").trim();
-            if (raw) regenAvoidRef.current = [...regenAvoidRef.current, raw].slice(-3);
+            if (raw)
+              regenAvoidRef.current = [...regenAvoidRef.current, raw].slice(-3);
           } catch {
             // ignore
           }
@@ -4071,7 +4110,10 @@ const InterviewSession = () => {
             void (async () => {
               try {
                 if (!scribeRef.current) {
-                  scheduleElevenReconnect({ reason: "clear_reconnect", err: null });
+                  scheduleElevenReconnect({
+                    reason: "clear_reconnect",
+                    err: null,
+                  });
                   return;
                 }
                 await reconnectElevenLabsClientRealtime({
@@ -4764,8 +4806,9 @@ const InterviewSession = () => {
         // realtime transcript events to avoid stale/duplicate appends.
         if (
           hideExtras &&
-          String(sttProviderRef.current || "").trim().toLowerCase() ===
-            "elevenlabs_client"
+          String(sttProviderRef.current || "")
+            .trim()
+            .toLowerCase() === "elevenlabs_client"
         ) {
           return;
         }
@@ -4826,8 +4869,9 @@ const InterviewSession = () => {
         if (String(payload?.sessionId || "") !== String(id)) return;
         if (
           hideExtras &&
-          String(sttProviderRef.current || "").trim().toLowerCase() ===
-            "elevenlabs_client"
+          String(sttProviderRef.current || "")
+            .trim()
+            .toLowerCase() === "elevenlabs_client"
         ) {
           return;
         }
@@ -5184,8 +5228,11 @@ const InterviewSession = () => {
                     })();
 
                     if (p === "elevenlabs_client") {
-                      const canUseWebSpeech = srCanUse && srMicAvailable !== false;
-                      const effective = getEffectiveSttProvider({ canUseWebSpeech });
+                      const canUseWebSpeech =
+                        srCanUse && srMicAvailable !== false;
+                      const effective = getEffectiveSttProvider({
+                        canUseWebSpeech,
+                      });
                       const fallbackNote =
                         !elevenClientConnected &&
                         effective &&
@@ -5282,8 +5329,7 @@ const InterviewSession = () => {
                               <span className="text-red-600 dark:text-red-400">
                                 Listening…
                               </span>
-                            ) :
-                              String(session?.settings?.sttProvider || "")
+                            ) : String(session?.settings?.sttProvider || "")
                                 .trim()
                                 .toLowerCase() === "elevenlabs_client" &&
                               (elevenClientReconnecting ||
@@ -5346,7 +5392,8 @@ const InterviewSession = () => {
                             <div className="mt-1 text-sm text-gray-900 dark:text-white">
                               {(() => {
                                 const p =
-                                  parakeetAnswer && typeof parakeetAnswer === "object"
+                                  parakeetAnswer &&
+                                  typeof parakeetAnswer === "object"
                                     ? parakeetAnswer
                                     : null;
                                 const shortText = String(
@@ -5364,7 +5411,9 @@ const InterviewSession = () => {
                                   : Array.isArray(p?.key_steps)
                                     ? p.key_steps
                                     : [];
-                                const code = String(p?.code_example?.code || "").trim();
+                                const code = String(
+                                  p?.code_example?.code || ""
+                                ).trim();
 
                                 const stripLeading = (v) =>
                                   String(v || "")
@@ -5426,9 +5475,10 @@ const InterviewSession = () => {
                                           Code example:
                                         </div>
                                         <pre className="mt-1 overflow-x-hidden rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 p-3 text-xs font-mono">
-                                        <code className="whitespace-pre-wrap break-words">
-                                          {renderHighlightedCode(code) || code}
-                                        </code>
+                                          <code className="whitespace-pre-wrap break-words">
+                                            {renderHighlightedCode(code) ||
+                                              code}
+                                          </code>
                                         </pre>
                                       </div>
                                     ) : null}
@@ -5598,16 +5648,19 @@ const InterviewSession = () => {
                               setQuickAiModel(next);
                               // Update header label immediately (local only).
                               try {
-                                queryClient.setQueryData(["session", id], (old) => {
-                                  if (!old) return old;
-                                  return {
-                                    ...old,
-                                    settings: {
-                                      ...(old.settings || {}),
-                                      aiModel: next,
-                                    },
-                                  };
-                                });
+                                queryClient.setQueryData(
+                                  ["session", id],
+                                  (old) => {
+                                    if (!old) return old;
+                                    return {
+                                      ...old,
+                                      settings: {
+                                        ...(old.settings || {}),
+                                        aiModel: next,
+                                      },
+                                    };
+                                  }
+                                );
                               } catch {
                                 // ignore
                               }

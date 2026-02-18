@@ -211,7 +211,9 @@ const ensureMandatoryParakeetFields = (parakeet) => {
   const pk = parakeet && typeof parakeet === "object" ? { ...parakeet } : {};
 
   const shortDef = String(pk.short_definition || "").trim();
-  let explanation = String(pk.explanation || pk.detailed_explanation || "").trim();
+  let explanation = String(
+    pk.explanation || pk.detailed_explanation || ""
+  ).trim();
   if (!explanation) explanation = shortDef;
 
   // Bullets are mandatory for the UX; if missing, derive from explanation.
@@ -231,7 +233,8 @@ const ensureMandatoryParakeetFields = (parakeet) => {
   }
 
   pk.explanation = explanation;
-  pk.detailed_explanation = String(pk.detailed_explanation || explanation).trim() || explanation;
+  pk.detailed_explanation =
+    String(pk.detailed_explanation || explanation).trim() || explanation;
   pk.bullets = bullets;
 
   return pk;
@@ -367,6 +370,7 @@ export const requestGroqDirectParakeet = async ({
   max_completion_tokens,
   reasoning_effort,
   variation,
+  singleRequest,
 } = {}) => {
   const attempt = Math.max(0, Number(variation?.attempt || 0) || 0);
   const avoid = Array.isArray(variation?.avoid) ? variation.avoid : [];
@@ -381,8 +385,7 @@ export const requestGroqDirectParakeet = async ({
     .join("\n\n---\n\n");
 
   const regenNote = attempt
-    ?
-      "\n\nREGENERATION MODE:\n" +
+    ? "\n\nREGENERATION MODE:\n" +
       `- Attempt: ${attempt}\n` +
       "- Create a DIFFERENT answer than the previous ones (new angle, new bullets, new code).\n" +
       "- Keep the SAME required section structure (Short/Detailed/Bullets/Code).\n" +
@@ -446,21 +449,22 @@ export const requestGroqDirectParakeet = async ({
   if (!q) throw new Error("question is required");
 
   const userPrompt = attempt
-    ?
-      `${q}\n\nMake a different answer than the previous ones.\n` +
+    ? `${q}\n\nMake a different answer than the previous ones.\n` +
       (avoidText
         ? `\nDO NOT REPEAT these (use a different angle):\n\n${avoidText}`
         : "")
     : q;
 
   // Lower temperature improves format adherence on smaller models.
+  // Default to stricter sampling for the first answer to reduce "code-only" outputs.
   const computedTemp =
     typeof temperature === "number"
       ? temperature
       : attempt
         ? Math.min(1.2, 0.9 + attempt * 0.1)
-        : 0.9;
-  const computedTopP = typeof top_p === "number" ? top_p : attempt ? 0.92 : 0.9;
+        : 0.4;
+  const computedTopP =
+    typeof top_p === "number" ? top_p : attempt ? 0.92 : 0.85;
 
   const computedMaxTokens =
     typeof max_completion_tokens === "number"
@@ -473,6 +477,11 @@ export const requestGroqDirectParakeet = async ({
     typeof reasoning_effort === "string" && reasoning_effort.trim()
       ? reasoning_effort.trim()
       : "low";
+
+  // Default to a single API call per answer to avoid duplicate network requests.
+  // Multi-pass (retry/repair) can be re-enabled explicitly if needed.
+  const isSingleRequest =
+    singleRequest === undefined ? true : Boolean(singleRequest);
 
   const runOnce = async ({ forceLowTemp } = {}) => {
     return await streamGroqChatCompletion({
@@ -525,44 +534,47 @@ export const requestGroqDirectParakeet = async ({
 
   let content = await runOnce();
 
-  // If the model violates format and returns mostly code, retry once with stricter sampling.
-  const firstParsedRaw = parseInterviewFormatToParakeet(content);
-  const firstParsed = ensureMandatoryParakeetFields(firstParsedRaw);
-  const looksCodeOnly =
-    !String(firstParsedRaw?.short_definition || "").trim() &&
-    !String(firstParsedRaw?.explanation || "").trim() &&
-    (!Array.isArray(firstParsedRaw?.bullets) || firstParsedRaw.bullets.length === 0) &&
-    String(firstParsedRaw?.code_example?.code || "").trim();
+  // Optional multi-pass quality enforcement. Disabled by default to prevent 2 API calls.
+  if (!isSingleRequest) {
+    // If the model violates format and returns mostly code, retry once with stricter sampling.
+    const firstParsedRaw = parseInterviewFormatToParakeet(content);
+    const looksCodeOnly =
+      !String(firstParsedRaw?.short_definition || "").trim() &&
+      !String(firstParsedRaw?.explanation || "").trim() &&
+      (!Array.isArray(firstParsedRaw?.bullets) ||
+        firstParsedRaw.bullets.length === 0) &&
+      String(firstParsedRaw?.code_example?.code || "").trim();
 
-  if (looksCodeOnly) {
-    content = await runOnce({ forceLowTemp: true });
+    if (looksCodeOnly) {
+      content = await runOnce({ forceLowTemp: true });
+    }
+
+    // Repair pass: if required sections are still missing, ask the model to reformat.
+    const parsed0 = parseInterviewFormatToParakeet(content);
+    const pk0 = ensureMandatoryParakeetFields(parsed0);
+    const missingMandatory =
+      !String(pk0?.explanation || "").trim() ||
+      !Array.isArray(pk0?.bullets) ||
+      pk0.bullets.length === 0;
+
+    if (missingMandatory) {
+      const repaired = await runRepair({ priorText: content });
+      const parsed1 = parseInterviewFormatToParakeet(repaired);
+      const repairedPk = ensureMandatoryParakeetFields(parsed1);
+      // Preserve code from the original response if repair omitted it.
+      if (
+        !String(repairedPk?.code_example?.code || "").trim() &&
+        String(pk0?.code_example?.code || "").trim()
+      ) {
+        repairedPk.code_example = pk0.code_example;
+      }
+      content = repaired;
+    }
   }
 
-  // Repair pass: if required sections are still missing, ask the model to reformat.
+  // Parse once and apply our local hard guarantees.
   let parsedRaw = parseInterviewFormatToParakeet(content);
   let parakeet = ensureMandatoryParakeetFields(parsedRaw);
-
-  const missingMandatory =
-    !String(parakeet?.explanation || "").trim() ||
-    !Array.isArray(parakeet?.bullets) ||
-    parakeet.bullets.length === 0;
-
-  if (missingMandatory) {
-    const repaired = await runRepair({ priorText: content });
-    parsedRaw = parseInterviewFormatToParakeet(repaired);
-    const repairedPk = ensureMandatoryParakeetFields(parsedRaw);
-    // Preserve code from the original response if repair omitted it.
-    if (
-      !String(repairedPk?.code_example?.code || "").trim() &&
-      String(parakeet?.code_example?.code || "").trim()
-    ) {
-      repairedPk.code_example = parakeet.code_example;
-    }
-    parakeet = repairedPk;
-    content = repaired;
-  }
-
-  // Final hard guarantee (never empty for mandatory fields).
   parakeet = ensureMandatoryParakeetFields(parakeet);
   return {
     cleaned: q,

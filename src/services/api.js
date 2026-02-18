@@ -59,7 +59,21 @@ export const api = axios.create({
 });
 
 api.interceptors.request.use((config) => {
-  const token = getAccessToken();
+  let token = getAccessToken();
+  // If the app hasn't hydrated AuthContext yet (hard refresh, slow startup),
+  // fall back to persisted auth to avoid an unnecessary 401->refresh->retry cycle.
+  if (!token) {
+    try {
+      const persisted = readPersistedAuth();
+      if (persisted?.accessToken) {
+        token = persisted.accessToken;
+        setAccessToken(token);
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   if (token) {
     config.headers = config.headers || {};
     config.headers.Authorization = `Bearer ${token}`;
@@ -145,7 +159,9 @@ api.interceptors.response.use(
               writePersistedAuth({
                 accessToken,
                 refreshToken: String(
-                  refreshResponse?.data?.refreshToken || prev?.refreshToken || ""
+                  refreshResponse?.data?.refreshToken ||
+                    prev?.refreshToken ||
+                    ""
                 ).trim(),
                 user: refreshResponse?.data?.data?.user || prev?.user || null,
                 expiresAt: prev.expiresAt,
