@@ -149,6 +149,10 @@ const InterviewSession = () => {
   const [isSharing, setIsSharing] = useState(false);
   const [isAnalyzingScreen, setIsAnalyzingScreen] = useState(false);
   const [isGeneratingAnswer, setIsGeneratingAnswer] = useState(false);
+  const isGeneratingAnswerRef = useRef(false);
+  const answerGenerationIdRef = useRef(0);
+  const aiAnswerAbortControllerRef = useRef(null);
+  const groqDirectAbortControllerRef = useRef(null);
   const [connectOpen, setConnectOpen] = useState(false);
   const [srBlocked, setSrBlocked] = useState(false);
   const [socketConnected, setSocketConnected] = useState(false);
@@ -3323,8 +3327,28 @@ const InterviewSession = () => {
   };
 
   const handleGenerateAIAnswer = async () => {
-    if (isGeneratingAnswer) return;
+    // State-only guards are async; rapid taps/clicks can re-enter before React applies state.
+    if (isGeneratingAnswerRef.current) return;
+    isGeneratingAnswerRef.current = true;
     setIsGeneratingAnswer(true);
+
+    // Generation id gates all async callbacks so only the latest click updates UI.
+    answerGenerationIdRef.current = (answerGenerationIdRef.current || 0) + 1;
+    const generationId = answerGenerationIdRef.current;
+
+    // Cancel any previous in-flight streams.
+    try {
+      aiAnswerAbortControllerRef.current?.abort?.();
+    } catch {
+      // ignore
+    }
+    try {
+      groqDirectAbortControllerRef.current?.abort?.();
+    } catch {
+      // ignore
+    }
+    aiAnswerAbortControllerRef.current = null;
+    groqDirectAbortControllerRef.current = null;
 
     const wasRecording = !!isRecordingRef.current;
     try {
@@ -3481,12 +3505,16 @@ const InterviewSession = () => {
 
       if (groqKey && isGroqDirectModel) {
         try {
+          const groqAbort = new AbortController();
+          groqDirectAbortControllerRef.current = groqAbort;
           let lastUiUpdateAt = 0;
           const resp = await requestGroqDirectParakeet({
             question,
             model: selectedModel,
             apiKey: groqKey,
+            signal: groqAbort.signal,
             onToken: (_tok, full) => {
+              if (answerGenerationIdRef.current !== generationId) return;
               // Keep UI responsive on mobile.
               const now = Date.now();
               if (now - lastUiUpdateAt < 60) return;
@@ -3501,6 +3529,8 @@ const InterviewSession = () => {
             },
           });
 
+          if (answerGenerationIdRef.current !== generationId) return;
+
           const pkRaw = resp?.parakeet;
           if (pkRaw && typeof pkRaw === "object") {
             const pk = { ...pkRaw };
@@ -3512,6 +3542,9 @@ const InterviewSession = () => {
             }
             setParakeetCleaned(String(resp?.cleaned || question).trim());
             setParakeetAnswer(pk);
+            // If we were showing partial markdown tokens, clear them once we have structured output.
+            aiAnswerRawRef.current = "";
+            setAiAnswer("");
             // Store to avoid repetition on subsequent regenerations.
             try {
               const raw = String(pk?._raw || "").trim();
@@ -3528,6 +3561,15 @@ const InterviewSession = () => {
           // If direct Groq fails (CORS/quota/etc), fall back to backend flow.
           // eslint-disable-next-line no-unused-vars
           const _ = e;
+
+          // Prevent partially streamed Groq tokens from looking like duplicated answers
+          // when we immediately fall back to the backend.
+          aiAnswerRawRef.current = "";
+          try {
+            setAiAnswer("");
+          } catch {
+            // ignore
+          }
         }
       }
 
@@ -3583,6 +3625,8 @@ const InterviewSession = () => {
 
       let streamedAny = false;
       try {
+        const streamAbort = new AbortController();
+        aiAnswerAbortControllerRef.current = streamAbort;
         const token = getAccessToken();
 
         const openStream = async () => {
@@ -3593,6 +3637,7 @@ const InterviewSession = () => {
               ...(token ? { Authorization: `Bearer ${token}` } : {}),
             },
             credentials: "include",
+            signal: streamAbort.signal,
             body: JSON.stringify({ question, draft: draftText }),
           });
 
@@ -3647,6 +3692,7 @@ const InterviewSession = () => {
         let lastUiUpdateAt = 0;
 
         const flushUi = () => {
+          if (answerGenerationIdRef.current !== generationId) return;
           const formatted = formatAiAnswerText(aiAnswerRawRef.current);
           setAiAnswer(formatted);
         };
@@ -3654,6 +3700,14 @@ const InterviewSession = () => {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
+          if (answerGenerationIdRef.current !== generationId) {
+            try {
+              await reader.cancel();
+            } catch {
+              // ignore
+            }
+            break;
+          }
           buffer += decoder.decode(value, { stream: true });
 
           // SSE frames are separated by a blank line.
@@ -3688,6 +3742,7 @@ const InterviewSession = () => {
               const t = String(payload?.token || "");
               if (t) {
                 streamedAny = true;
+                if (answerGenerationIdRef.current !== generationId) continue;
                 aiAnswerRawRef.current += t;
 
                 // Throttle UI updates to keep mobile smooth.
@@ -3709,6 +3764,9 @@ const InterviewSession = () => {
         flushUi();
       } catch (streamErr) {
         if (showRetryToast) toast.dismiss(retryToastId);
+        // If another generation started (or we aborted), do not overwrite UI via fallback.
+        if (answerGenerationIdRef.current !== generationId) return;
+        if (streamErr?.name === "AbortError") return;
         // Fallback to the existing non-streaming endpoint.
         const response = await api.post(`/sessions/${id}/ai-answer`, {
           question,
@@ -3752,7 +3810,13 @@ const InterviewSession = () => {
         toast.error(msg);
       }
     } finally {
-      setIsGeneratingAnswer(false);
+      // Only the most recent generation is allowed to flip the flags.
+      if (answerGenerationIdRef.current === generationId) {
+        setIsGeneratingAnswer(false);
+        isGeneratingAnswerRef.current = false;
+        aiAnswerAbortControllerRef.current = null;
+        groqDirectAbortControllerRef.current = null;
+      }
 
       // Resume live Listening after AI Answer.
       if (hideExtras && wasRecording && shouldKeepListeningRef.current) {
@@ -3780,7 +3844,7 @@ const InterviewSession = () => {
   };
 
   const handleRegenerateParakeet = async () => {
-    if (isGeneratingAnswer) return;
+    if (isGeneratingAnswerRef.current) return;
     if (!id) return;
     if (!parakeetAnswer) return;
     const cleaned = String(parakeetCleaned || "").trim();
@@ -3790,7 +3854,24 @@ const InterviewSession = () => {
     const questionToUse = cleaned || fallbackQ;
     if (!questionToUse) return;
 
+    isGeneratingAnswerRef.current = true;
     setIsGeneratingAnswer(true);
+
+    answerGenerationIdRef.current = (answerGenerationIdRef.current || 0) + 1;
+    const generationId = answerGenerationIdRef.current;
+
+    try {
+      aiAnswerAbortControllerRef.current?.abort?.();
+    } catch {
+      // ignore
+    }
+    try {
+      groqDirectAbortControllerRef.current?.abort?.();
+    } catch {
+      // ignore
+    }
+    aiAnswerAbortControllerRef.current = null;
+    groqDirectAbortControllerRef.current = null;
     try {
       const selectedModel = String(
         quickAiModel || session?.settings?.aiModel || ""
@@ -3802,6 +3883,8 @@ const InterviewSession = () => {
         selectedModel === QUICK_MODEL_FAST;
 
       if (groqKey && isGroqDirectModel) {
+        const groqAbort = new AbortController();
+        groqDirectAbortControllerRef.current = groqAbort;
         const nextAttempt = (regenAttemptRef.current || 0) + 1;
         regenAttemptRef.current = nextAttempt;
 
@@ -3809,11 +3892,13 @@ const InterviewSession = () => {
           question: questionToUse,
           model: selectedModel,
           apiKey: groqKey,
+          signal: groqAbort.signal,
           variation: {
             attempt: nextAttempt,
             avoid: regenAvoidRef.current,
           },
         });
+        if (answerGenerationIdRef.current !== generationId) return;
         const pkRaw = resp?.parakeet;
         if (pkRaw && typeof pkRaw === "object") {
           const pk = { ...pkRaw };
@@ -3878,7 +3963,12 @@ const InterviewSession = () => {
         toast.error(serverMsg || e?.message || "Regenerate failed");
       }
     } finally {
-      setIsGeneratingAnswer(false);
+      if (answerGenerationIdRef.current === generationId) {
+        setIsGeneratingAnswer(false);
+        isGeneratingAnswerRef.current = false;
+        aiAnswerAbortControllerRef.current = null;
+        groqDirectAbortControllerRef.current = null;
+      }
     }
   };
 
