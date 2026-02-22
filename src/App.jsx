@@ -9,9 +9,12 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "react-hot-toast";
 import { ErrorBoundary } from "react-error-boundary";
+
 import { AuthProvider } from "./contexts/AuthContext";
 import { SocketProvider } from "./contexts/SocketContext";
 import { ThemeProvider } from "./contexts/ThemeContext";
+import { ScreenShareProvider } from "./contexts/ScreenShareContext";
+
 import ProtectedRoute from "./components/common/ProtectedRoute";
 import LoadingSpinner from "./components/common/LoadingSpinner";
 import ErrorFallback from "./components/common/ErrorFallback";
@@ -31,6 +34,9 @@ const SessionDetails = lazy(() => import("./pages/sessions/SessionDetails"));
 const Settings = lazy(() => import("./pages/settings/Settings"));
 const Profile = lazy(() => import("./pages/settings/Profile"));
 const AdminDashboard = lazy(() => import("./pages/admin/Dashboard"));
+const ScreenShareDashboard = lazy(
+  () => import("./pages/screenShare/ScreenShareDashboard")
+);
 const NotFound = lazy(() => import("./pages/NotFound"));
 
 const queryClient = new QueryClient({
@@ -51,89 +57,95 @@ function App() {
         <AuthProvider>
           <SocketProvider>
             <ThemeProvider>
-              <Router
-                future={{
-                  v7_startTransition: true,
-                  v7_relativeSplatPath: true,
-                }}
-              >
-                <Suspense fallback={<LoadingSpinner fullScreen />}>
-                  <Routes>
-                    {/* Public routes */}
-                    <Route path="/" element={<Home />} />
-                    <Route path="/login" element={<Login />} />
-                    <Route path="/register" element={<Register />} />
+              <ScreenShareProvider>
+                <Router
+                  future={{
+                    v7_startTransition: true,
+                    v7_relativeSplatPath: true,
+                  }}
+                >
+                  <Suspense fallback={<LoadingSpinner fullScreen />}>
+                    <Routes>
+                      {/* Public routes */}
+                      <Route path="/" element={<Home />} />
+                      <Route path="/login" element={<Login />} />
+                      <Route path="/register" element={<Register />} />
 
-                    {/* Protected routes with layout */}
-                    <Route
-                      element={
-                        <ProtectedRoute>
-                          <Layout />
-                        </ProtectedRoute>
-                      }
-                    >
-                      <Route path="/dashboard" element={<Dashboard />} />
-                      <Route path="/sessions" element={<Sessions />} />
+                      {/* Protected routes with layout */}
                       <Route
-                        path="/sessions/create"
-                        element={<CreateSession />}
-                      />
-                      <Route
-                        path="/sessions/:id"
-                        element={<SessionDetails />}
-                      />
-                      <Route
-                        path="/sessions/:id/interview"
-                        element={<InterviewSession />}
-                      />
-                      <Route path="/settings" element={<Settings />} />
-                      <Route path="/profile" element={<Profile />} />
-                      <Route
-                        path="/billing"
-                        element={<Navigate to="/dashboard" replace />}
-                      />
-
-                      {/* Admin routes */}
-                      <Route
-                        path="/admin"
                         element={
-                          <ProtectedRoute adminOnly>
-                            <AdminDashboard />
+                          <ProtectedRoute>
+                            <Layout />
                           </ProtectedRoute>
                         }
-                      />
-                    </Route>
+                      >
+                        <Route path="/dashboard" element={<Dashboard />} />
+                        <Route path="/sessions" element={<Sessions />} />
+                        <Route
+                          path="/sessions/create"
+                          element={<CreateSession />}
+                        />
+                        <Route
+                          path="/sessions/:id"
+                          element={<SessionDetails />}
+                        />
+                        <Route
+                          path="/sessions/:id/interview"
+                          element={<InterviewSession />}
+                        />
+                        <Route
+                          path="/screen-share"
+                          element={<ScreenShareDashboard />}
+                        />
+                        <Route path="/settings" element={<Settings />} />
+                        <Route path="/profile" element={<Profile />} />
+                        <Route
+                          path="/billing"
+                          element={<Navigate to="/dashboard" replace />}
+                        />
 
-                    {/* 404 */}
-                    <Route path="*" element={<NotFound />} />
-                  </Routes>
-                </Suspense>
-              </Router>
+                        {/* Admin routes */}
+                        <Route
+                          path="/admin"
+                          element={
+                            <ProtectedRoute adminOnly>
+                              <AdminDashboard />
+                            </ProtectedRoute>
+                          }
+                        />
+                      </Route>
 
-              <Toaster
-                position="top-right"
-                toastOptions={{
-                  duration: 4000,
-                  style: {
-                    background: "#363636",
-                    color: "#fff",
-                  },
-                  success: {
-                    duration: 3000,
-                    iconTheme: {
-                      primary: "#10b981",
-                      secondary: "#fff",
-                    },
-                  },
-                  error: {
+                      {/* 404 */}
+                      <Route path="*" element={<NotFound />} />
+                    </Routes>
+                  </Suspense>
+                </Router>
+
+                <Toaster
+                  position="top-right"
+                  toastOptions={{
                     duration: 4000,
-                    iconTheme: {
-                      primary: "#ef4444",
-                      secondary: "#fff",
+                    style: {
+                      background: "#363636",
+                      color: "#fff",
                     },
-                  },
-                }}
-              />
+                    success: {
+                      duration: 3000,
+                      iconTheme: {
+                        primary: "#10b981",
+                        secondary: "#fff",
+                      },
+                    },
+                    error: {
+                      duration: 4000,
+                      iconTheme: {
+                        primary: "#ef4444",
+                        secondary: "#fff",
+                      },
+                    },
+                  }}
+                />
+              </ScreenShareProvider>
             </ThemeProvider>
           </SocketProvider>
         </AuthProvider>

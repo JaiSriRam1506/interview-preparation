@@ -4,6 +4,8 @@ import react from "@vitejs/plugin-react";
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
+  const devPortRaw = String(env.VITE_DEV_PORT || "").trim();
+  const devPort = devPortRaw ? Number(devPortRaw) : 5174;
   // Default backend target for local dev.
   // In this workspace the backend is commonly run on 3000 via `.env`/Render-style setups.
   // If your backend uses a different port, set `VITE_BACKEND_URL`.
@@ -37,7 +39,7 @@ export default defineConfig(({ mode }) => {
     server: {
       // Bind to all interfaces (fixes ngrok access on Windows where Vite may bind only to ::1).
       host: true,
-      port: 5174,
+      port: Number.isFinite(devPort) && devPort > 0 ? devPort : 5174,
       strictPort: true,
       // Needed for ngrok/mobile access; otherwise Vite blocks unknown Host headers.
       allowedHosts: true,

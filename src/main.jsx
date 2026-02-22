@@ -1,5 +1,6 @@
 import { createRoot } from "react-dom/client";
 import "./index.css";
+import "@livekit/components-styles";
 import App from "./App.jsx";
 
 createRoot(document.getElementById("root")).render(<App />);

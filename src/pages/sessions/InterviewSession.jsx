@@ -90,6 +90,8 @@ const InterviewSession = () => {
   const [elevenClientConnected, setElevenClientConnected] = useState(false);
   const [elevenClientReconnecting, setElevenClientReconnecting] =
     useState(false);
+  const [isHardResetting, setIsHardResetting] = useState(false);
+  const isHardResettingRef = useRef(false);
 
   useEffect(() => installAudioContextCloseSuppression(), []);
 
@@ -120,6 +122,8 @@ const InterviewSession = () => {
   const elevenClearedAtRef = useRef(0);
   const elevenClearReconnectInFlightRef = useRef(false);
   const elevenClearReconnectLastAtRef = useRef(0);
+  const elevenPostClearStaleHitsRef = useRef(0);
+  const elevenPostClearStaleFirstAtRef = useRef(0);
   // After Clear, ElevenLabs can still deliver a late chunk from the previous utterance.
   // Guard against re-adding that stale text by ignoring chunks that match the pre-clear tail.
   const elevenIgnoreUntilDifferentRef = useRef(0);
@@ -172,8 +176,83 @@ const InterviewSession = () => {
     const clearedAt = Number(elevenClearedAtRef.current || 0);
     const msSinceClear = clearedAt ? Date.now() - clearedAt : Infinity;
     const isVerySoonAfterClear = msSinceClear >= 0 && msSinceClear <= 2500;
+    const isWithinStaleWindow = msSinceClear >= 0 && msSinceClear <= 8000;
     const isShort = chunkLower.length < 28;
     const isLong = chunkLower.length >= 60;
+
+    // Best-effort overlap stripping: if a mixed chunk starts with a suffix of the
+    // pre-clear snapshot/tail, remove that prefix portion. This is more robust
+    // than exact substring matching (punctuation/casing can differ).
+    if (isWithinStaleWindow) {
+      try {
+        if (snapshotRaw) {
+          const stripped = stripOverlapPrefix(snapshotRaw, raw, {
+            maxOverlap: 420,
+            minOverlap: 18,
+          });
+          const removed = rawLen - String(stripped || "").length;
+          if (removed >= 18 && String(stripped || "").trim()) {
+            if (removed >= 40) {
+              try {
+                noteElevenPostClearStaleHit({
+                  reason: "snapshotSuffixOverlapStrip",
+                  msSinceClear,
+                  sample: sttSafeSample(raw),
+                });
+              } catch {
+                // ignore
+              }
+            }
+            if (shouldVerboseSttTrace()) {
+              sttDebugThrottled("sanitize-overlap-strip", "sanitize", {
+                action: "strip",
+                reason: "snapshotSuffixOverlap",
+                msSinceClear,
+                rawLen,
+                outLen: String(stripped || "").length,
+              });
+            }
+            return stripped;
+          }
+        }
+      } catch {
+        // ignore
+      }
+      try {
+        if (tailRaw) {
+          const stripped = stripOverlapPrefix(tailRaw, raw, {
+            maxOverlap: 260,
+            minOverlap: 18,
+          });
+          const removed = rawLen - String(stripped || "").length;
+          if (removed >= 18 && String(stripped || "").trim()) {
+            if (removed >= 40) {
+              try {
+                noteElevenPostClearStaleHit({
+                  reason: "tailSuffixOverlapStrip",
+                  msSinceClear,
+                  sample: sttSafeSample(raw),
+                });
+              } catch {
+                // ignore
+              }
+            }
+            if (shouldVerboseSttTrace()) {
+              sttDebugThrottled("sanitize-overlap-strip-tail", "sanitize", {
+                action: "strip",
+                reason: "tailSuffixOverlap",
+                msSinceClear,
+                rawLen,
+                outLen: String(stripped || "").length,
+              });
+            }
+            return stripped;
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
 
     // If it's very soon after clear AND the chunk exists in the pre-clear tail,
     // it's almost certainly a late delivery of the previous utterance.
@@ -187,6 +266,15 @@ const InterviewSession = () => {
       tail &&
       tail.includes(chunkLower)
     ) {
+      try {
+        noteElevenPostClearStaleHit({
+          reason: "tailShortDrop",
+          msSinceClear,
+          sample: sttSafeSample(raw),
+        });
+      } catch {
+        // ignore
+      }
       if (shouldVerboseSttTrace()) {
         sttDebugThrottled("sanitize-tail-drop", "sanitize", {
           action: "drop",
@@ -200,21 +288,36 @@ const InterviewSession = () => {
     }
 
     // If the whole chunk is clearly part of the old snapshot, it's stale.
-    if (
-      snapshot &&
-      snapshot.includes(chunkLower) &&
-      (isLong || (isVerySoonAfterClear && !isShort))
-    ) {
-      if (shouldVerboseSttTrace()) {
-        sttDebugThrottled("sanitize-snap-drop", "sanitize", {
-          action: "drop",
-          reason: "snapshotContains",
-          msSinceClear,
-          rawLen,
-          sample: sttSafeSample(raw),
-        });
+    // Keep this active for a few seconds after Clear because old chunks can arrive late.
+    if (snapshot && snapshot.includes(chunkLower)) {
+      const shouldDrop =
+        isLong ||
+        (isVerySoonAfterClear && !isShort) ||
+        (isWithinStaleWindow && chunkLower.length >= 24);
+
+      if (!shouldDrop) {
+        // treat as new; allow downstream stripping/dedupe
+      } else {
+        try {
+          noteElevenPostClearStaleHit({
+            reason: "snapshotContainsDrop",
+            msSinceClear,
+            sample: sttSafeSample(raw),
+          });
+        } catch {
+          // ignore
+        }
+        if (shouldVerboseSttTrace()) {
+          sttDebugThrottled("sanitize-snap-drop", "sanitize", {
+            action: "drop",
+            reason: "snapshotContains",
+            msSinceClear,
+            rawLen,
+            sample: sttSafeSample(raw),
+          });
+        }
+        return "";
       }
-      return "";
     }
 
     // Deterministic stripping: if the chunk contains the pre-clear snapshot/tail anywhere,
@@ -348,9 +451,16 @@ const InterviewSession = () => {
         Number(ignoreRealtimeUntilRef.current || 0) - Date.now(),
     });
 
-    // Short post-clear window: ignore late chunks from the old utterance.
+    // Short post-clear window: briefly ignore realtime partials to let the SDK flush.
+    // Keep it small; longer windows cause the beginning of new speech to be missed.
     safe(() => {
-      ignoreRealtimeUntilRef.current = Date.now() + 200;
+      ignoreRealtimeUntilRef.current = Date.now() + 150;
+    });
+
+    // Reset stale detection for this clear.
+    safe(() => {
+      elevenPostClearStaleHitsRef.current = 0;
+      elevenPostClearStaleFirstAtRef.current = Date.now();
     });
 
     // Longer window: if ElevenLabs sends a chunk that includes old+new text,
@@ -395,34 +505,26 @@ const InterviewSession = () => {
     const msSinceClear = clearedAt ? Date.now() - clearedAt : Infinity;
     const len = textLower.length;
 
-    // Keep it simple: for a few seconds after Clear, drop chunks that look like
-    // the previous visible text (either direction substring match).
-    if (snapshotLower) {
-      const looksLikeOld =
-        snapshotLower.includes(textLower) || textLower.includes(snapshotLower);
-
-      if (msSinceClear >= 0 && msSinceClear <= 2500) {
-        if (looksLikeOld && len >= 18) {
-          sttDebug("drop", {
-            kind,
-            reason: "snapshotSoon",
+    // Avoid delaying new speech: don't broadly drop partials based on snapshot similarity.
+    // UI-level sanitization will prevent old text from reappearing.
+    if (snapshotLower && msSinceClear >= 0 && msSinceClear <= 8000) {
+      if (len >= 80 && snapshotLower.includes(textLower)) {
+        try {
+          noteElevenPostClearStaleHit({
+            reason: "acceptDropHuge",
             msSinceClear,
-            len,
+            sample: sttSafeSample(normalized),
           });
-          return false;
+        } catch {
+          // ignore
         }
-      }
-
-      if (msSinceClear > 2500 && msSinceClear <= 8000) {
-        if (looksLikeOld && len >= 40) {
-          sttDebug("drop", {
-            kind,
-            reason: "snapshotLong",
-            msSinceClear,
-            len,
-          });
-          return false;
-        }
+        sttDebug("drop", {
+          kind,
+          reason: "snapshotHuge",
+          msSinceClear,
+          len,
+        });
+        return false;
       }
     }
 
@@ -432,6 +534,150 @@ const InterviewSession = () => {
       len,
     });
     return true;
+  };
+
+  const sanitizeListeningUiAfterClear = (nextText) => {
+    const until = Number(elevenIgnoreUntilDifferentRef.current || 0);
+    if (!until || Date.now() > until) return nextText;
+
+    const msSinceClear = getMsSinceClear();
+    if (
+      !Number.isFinite(msSinceClear) ||
+      msSinceClear < 0 ||
+      msSinceClear > 8000
+    ) {
+      return nextText;
+    }
+
+    const raw = normalizeSpeechText(nextText).replace(/\s+/g, " ").trimStart();
+    if (!raw) return raw;
+
+    const snapshotRaw = String(elevenSnapshotAtClearRef.current || "");
+    const tailRaw = String(elevenTailAtClearRef.current || "");
+
+    // Strip long old prefixes if they show up at the start of the composed UI text.
+    try {
+      if (snapshotRaw) {
+        const stripped = stripOverlapPrefix(snapshotRaw, raw, {
+          maxOverlap: 420,
+          minOverlap: 18,
+        });
+        const removed = raw.length - String(stripped || "").length;
+        if (removed >= 24) {
+          try {
+            noteElevenPostClearStaleHit({
+              reason: "uiStripSnapshot",
+              msSinceClear,
+              sample: sttSafeSample(raw),
+            });
+          } catch {
+            // ignore
+          }
+          return String(stripped || "").trimStart();
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    try {
+      if (tailRaw) {
+        const stripped = stripOverlapPrefix(tailRaw, raw, {
+          maxOverlap: 260,
+          minOverlap: 18,
+        });
+        const removed = raw.length - String(stripped || "").length;
+        if (removed >= 24) {
+          try {
+            noteElevenPostClearStaleHit({
+              reason: "uiStripTail",
+              msSinceClear,
+              sample: sttSafeSample(raw),
+            });
+          } catch {
+            // ignore
+          }
+          return String(stripped || "").trimStart();
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    return raw;
+  };
+
+  const noteElevenPostClearStaleHit = ({
+    reason,
+    msSinceClear,
+    sample,
+  } = {}) => {
+    const ms = Number(msSinceClear);
+    if (!Number.isFinite(ms) || ms < 0 || ms > 8000) return;
+
+    // Only act if we actually had something on screen at Clear time.
+    const hadSnapshot = Boolean(
+      String(elevenSnapshotAtClearRef.current || "").trim()
+    );
+    const hadTail = Boolean(String(elevenTailAtClearRef.current || "").trim());
+    if (!hadSnapshot && !hadTail) return;
+
+    if (!shouldKeepListeningRef.current) return;
+    if (!isRecordingRef.current) return;
+    if (elevenClientDisabledRef.current) return;
+    if (elevenReconnectInFlightRef.current) return;
+    if (elevenClearReconnectInFlightRef.current) return;
+
+    const now = Date.now();
+    const firstAt = Number(elevenPostClearStaleFirstAtRef.current || 0);
+    if (!firstAt || now - firstAt > 8000) {
+      elevenPostClearStaleFirstAtRef.current = now;
+      elevenPostClearStaleHitsRef.current = 0;
+    }
+
+    elevenPostClearStaleHitsRef.current =
+      Math.max(0, Number(elevenPostClearStaleHitsRef.current || 0)) + 1;
+
+    sttDebugThrottled("stale-hit", "staleHit", {
+      reason: String(reason || "").trim() || "stale",
+      msSinceClear: ms,
+      hits: Number(elevenPostClearStaleHitsRef.current || 0),
+      sample: String(sample || ""),
+    });
+
+    const hits = Number(elevenPostClearStaleHitsRef.current || 0);
+    if (hits < 2) return;
+
+    // Throttle the recovery reconnect.
+    const lastAt = Number(elevenClearReconnectLastAtRef.current || 0);
+    if (lastAt && now - lastAt < 12_000) return;
+    elevenClearReconnectLastAtRef.current = now;
+
+    elevenClearReconnectInFlightRef.current = true;
+
+    // Suppress onDisconnect side effects during a deliberate reconnect.
+    elevenClientIgnoreDisconnectUntilRef.current = Date.now() + 4000;
+
+    reconnectElevenLabsClientRealtime({
+      api,
+      scribeRef,
+      elevenLanguageCode,
+      onBeforeReconnect: () => {
+        ignoreRealtimeUntilRef.current = Date.now() + 700;
+        elevenClientBaseRef.current = "";
+      },
+    })
+      .catch((e) => {
+        // If direct reconnect fails, let the normal reconnect controller recover.
+        try {
+          scheduleElevenReconnect({ reason: "postClearStale", err: e });
+        } catch {
+          // ignore
+        }
+      })
+      .finally(() => {
+        elevenClearReconnectInFlightRef.current = false;
+      });
   };
 
   const resetListeningBuffers = ({ bumpEpoch } = {}) => {
@@ -448,13 +694,14 @@ const InterviewSession = () => {
 
     primeElevenPostClearGuards({ prevEleven: prevVisible, bumpEpoch });
 
-    // If Eleven keeps replaying the previous utterance after Clear, a fast reconnect
-    // is the most reliable way to get a clean stream.
+    // Reliability first: ElevenLabs can replay buffered audio after Clear/AI Answer.
+    // A quick reconnect is the most reliable way to ensure a clean stream.
     safe(() => {
       if (!shouldKeepListeningRef.current) return;
       if (!isRecordingRef.current) return;
       if (elevenReconnectInFlightRef.current) return;
       if (elevenClearReconnectInFlightRef.current) return;
+      if (elevenClientDisabledRef.current) return;
 
       const now = Date.now();
       const lastAt = Number(elevenClearReconnectLastAtRef.current || 0);
@@ -462,19 +709,23 @@ const InterviewSession = () => {
       elevenClearReconnectLastAtRef.current = now;
 
       elevenClearReconnectInFlightRef.current = true;
-      ignoreRealtimeUntilRef.current = Date.now() + 1500;
+
+      // Suppress the deliberate disconnect from triggering reconnect-toasts/fallback.
+      elevenClientIgnoreDisconnectUntilRef.current = Date.now() + 4000;
+      // Briefly ignore any late chunks from the previous connection.
+      ignoreRealtimeUntilRef.current = Date.now() + 1200;
 
       reconnectElevenLabsClientRealtime({
         api,
         scribeRef,
         elevenLanguageCode,
         onBeforeReconnect: () => {
-          ignoreRealtimeUntilRef.current = Date.now() + 1000;
+          ignoreRealtimeUntilRef.current = Date.now() + 1200;
           elevenClientBaseRef.current = "";
         },
       })
         .catch(() => {
-          // ignore; reconnect loop will handle recovery
+          // ignore; normal reconnect loop will handle recovery if needed
         })
         .finally(() => {
           elevenClearReconnectInFlightRef.current = false;
@@ -536,6 +787,93 @@ const InterviewSession = () => {
 
     if (shouldFocusListeningInput()) {
       safe(() => listeningInputRef.current?.focus?.());
+    }
+  };
+
+  const handleHardReset = async () => {
+    if (isHardResettingRef.current) return;
+    isHardResettingRef.current = true;
+    setIsHardResetting(true);
+
+    const toastId = "hard-reset";
+    const wasRecording = !!isRecordingRef.current;
+
+    try {
+      toast.loading("Hard resetting…", { id: toastId });
+
+      // Drop any late async chunks and clear local listening buffers.
+      try {
+        resetListeningBuffers({ bumpEpoch: true });
+      } catch {
+        // ignore
+      }
+
+      // Stop any in-flight reconnect timers/loops.
+      try {
+        clearElevenReconnectTimer?.();
+      } catch {
+        // ignore
+      }
+      try {
+        elevenReconnectAttemptsRef.current = 0;
+      } catch {
+        // ignore
+      }
+
+      // Force close the realtime mic + audio context.
+      try {
+        handleStopRecordingRef.current?.();
+      } catch {
+        // ignore
+      }
+
+      // Clear provider-side transcript buffer if supported.
+      try {
+        scribeRef.current?.clearTranscripts?.();
+      } catch {
+        // ignore
+      }
+
+      // Force socket reconnect (best-effort; safe if not connected).
+      try {
+        if (socket?.connected) socket.disconnect();
+      } catch {
+        // ignore
+      }
+      try {
+        socket?.connect?.();
+      } catch {
+        // ignore
+      }
+
+      // Always resume Listening after a hard reset.
+      // This button click is a direct user gesture, so Android Chrome should allow mic start.
+      try {
+        shouldKeepListeningRef.current = true;
+      } catch {
+        // ignore
+      }
+      try {
+        await handleStartRecordingRef.current?.({ fromUserGesture: true });
+      } catch {
+        // If resume fails, fall back to a full reload.
+        throw new Error("resume-failed");
+      }
+
+      toast.success(wasRecording ? "Hard reset done" : "Hard reset done — Listening resumed", {
+        id: toastId,
+      });
+    } catch {
+      // Nuclear option: full page reload guarantees all WebAudio/WebSocket state is reset.
+      toast.error("Reset failed — reloading…", { id: toastId });
+      try {
+        setTimeout(() => window.location.reload(), 250);
+      } catch {
+        // ignore
+      }
+    } finally {
+      setIsHardResetting(false);
+      isHardResettingRef.current = false;
     }
   };
 
@@ -639,7 +977,7 @@ const InterviewSession = () => {
     return Boolean(ignoreUntil && Date.now() < ignoreUntil);
   };
 
-  const canProcessRealtimeEvent = (epoch) => {
+  const canProcessRealtimeEvent = (epoch, { kind } = {}) => {
     if (!shouldKeepListeningRef.current) {
       sttDebugThrottled("canProcess-keep", "skip", {
         reason: "shouldKeepListening=false",
@@ -655,6 +993,9 @@ const InterviewSession = () => {
       return false;
     }
     if (shouldIgnoreRealtimeNow()) {
+      // Do not block committed events during the post-clear window; sanitizer
+      // will strip old prefixes and keep the stream moving.
+      if (kind === "committed") return true;
       sttDebugThrottled("canProcess-ignore", "skip", {
         reason: "ignoreRealtimeUntil",
         epoch,
@@ -932,7 +1273,7 @@ const InterviewSession = () => {
     onPartialTranscript: (data) => {
       try {
         const epoch = getEpochSnapshot();
-        if (!canProcessRealtimeEvent(epoch)) return;
+        if (!canProcessRealtimeEvent(epoch, { kind: "partial" })) return;
 
         const partialRaw = getScribeText(data);
         if (!partialRaw) return;
@@ -998,7 +1339,9 @@ const InterviewSession = () => {
           });
         }
 
-        setListeningTextIfEpoch(epoch, composed);
+        const uiText = sanitizeListeningUiAfterClear(composed);
+        if (!uiText) return;
+        setListeningTextIfEpoch(epoch, uiText);
       } catch {
         // ignore
       }
@@ -1006,7 +1349,7 @@ const InterviewSession = () => {
     onCommittedTranscript: (data) => {
       try {
         const epoch = getEpochSnapshot();
-        if (!canProcessRealtimeEvent(epoch)) return;
+        if (!canProcessRealtimeEvent(epoch, { kind: "committed" })) return;
 
         const textRaw = getScribeText(data);
         if (!textRaw) return;
@@ -1065,12 +1408,14 @@ const InterviewSession = () => {
         }
 
         // Update Listening with committed base.
-        setListeningTextIfEpoch(
-          epoch,
-          `${speechBaseTextRef.current}${elevenClientBaseRef.current}`
-            .replace(/\s+/g, " ")
-            .trimStart()
-        );
+        {
+          const composed =
+            `${speechBaseTextRef.current}${elevenClientBaseRef.current}`
+              .replace(/\s+/g, " ")
+              .trimStart();
+          const uiText = sanitizeListeningUiAfterClear(composed);
+          if (uiText) setListeningTextIfEpoch(epoch, uiText);
+        }
 
         if (!isEpochCurrent(epoch)) return;
         pushTranscript(text, "mic");
@@ -2438,10 +2783,23 @@ const InterviewSession = () => {
                               ).trim()
                             )
                           }
-                          className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-sm font-semibold hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                          className="h-9 px-2.5 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-xs sm:text-sm font-semibold hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
                           title="Regenerate answer"
                         >
                           Regenerate
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={handleHardReset}
+                          disabled={isHardResetting}
+                          className="h-9 px-2.5 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-xs sm:text-sm font-semibold hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                          title="Hard reset all connections"
+                        >
+                          <span className="inline-flex items-center gap-1">
+                            <Power className="h-4 w-4" />
+                            {isHardResetting ? "Resetting…" : "Hard Reset"}
+                          </span>
                         </button>
 
                         <button

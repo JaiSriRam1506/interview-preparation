@@ -7,6 +7,7 @@ import {
   X,
   Home,
   Video,
+  Monitor,
   FileText,
   CreditCard,
   Settings,
@@ -16,6 +17,8 @@ import {
 } from "lucide-react";
 import { useAuth } from "../../contexts/AuthContext";
 import { useTheme } from "../../contexts/ThemeContext";
+import ScreenSharePublisher from "../screenShare/ScreenSharePublisher";
+import ScreenShareViewer from "../screenShare/ScreenShareViewer";
 
 export const MobileTopBarContext = createContext({
   setMobileTopBar: () => {},
@@ -46,6 +49,10 @@ export default function Layout() {
   const { user, logout } = useAuth();
   const { theme, toggle } = useTheme();
   const [mobileTopBar, setMobileTopBar] = useState(null);
+  const location = useLocation();
+  const showScreenShareUi =
+    location.pathname === "/screen-share" ||
+    location.pathname.startsWith("/screen-share/");
 
   const mobileTopBarValue = useMemo(
     () => ({
@@ -138,12 +145,16 @@ export default function Layout() {
 
           <main className="flex-1 min-w-0">
             <Outlet />
+            <ScreenSharePublisher showUi={showScreenShareUi} />
+            <ScreenShareViewer showUi={showScreenShareUi} />
           </main>
         </div>
 
         <div className="lg:hidden">
           <main className="min-w-0">
             <Outlet />
+            <ScreenSharePublisher showUi={showScreenShareUi} />
+            <ScreenShareViewer showUi={showScreenShareUi} />
           </main>
         </div>
       </div>
@@ -165,6 +176,12 @@ function SidebarContent({ user, logout, onNav }) {
           to="/sessions"
           icon={<Video className="h-4 w-4" />}
           label="Call Sessions"
+          onClick={onNav}
+        />
+        <NavItem
+          to="/screen-share"
+          icon={<Monitor className="h-4 w-4" />}
+          label="Screen Share"
           onClick={onNav}
         />
         <NavItem

@@ -12,6 +12,8 @@
     "format": "prettier --write src/"
   },
   "dependencies": {
+    "@livekit/components-react": "^2.9.3",
+    "@livekit/components-styles": "^1.1.6",
     "@elevenlabs/elevenlabs-js": "^2.35.0",
     "@elevenlabs/react": "^0.14.0",
     "@hookform/resolvers": "^3.3.2",
@@ -42,6 +44,7 @@
     "react-pdf": "^7.6.0",
     "react-phone-number-input": "^3.3.0",
     "react-query": "^3.39.3",
+    "qrcode.react": "^3.1.0",
     "react-router-dom": "^6.20.0",
     "react-speech-recognition": "^4.0.1",
     "react-spinners": "^0.13.8",
@@ -51,6 +54,7 @@
     "recharts": "^2.12.7",
     "remark-gfm": "^4.0.0",
     "socket.io-client": "^4.7.0",
+    "livekit-client": "^2.16.2",
     "tailwind-merge": "^2.2.0",
     "web-vitals": "^3.5.0",
     "zod": "^3.22.4",

@@ -7,7 +7,6 @@ import {
   TrendingUp,
   Users,
   Zap,
-  Award,
   Plus,
   ExternalLink,
   ChevronRight,
@@ -80,13 +79,6 @@ const Dashboard = () => {
       change: "+12%",
       icon: <Calendar className="h-6 w-6" />,
       color: "bg-blue-500",
-    },
-    {
-      title: "Avg. Score",
-      value: `${dashboardData?.averageScore || 0}/10`,
-      change: "+5%",
-      icon: <Award className="h-6 w-6" />,
-      color: "bg-green-500",
     },
     {
       title: "Tokens Used",
@@ -183,7 +175,7 @@ const Dashboard = () => {
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ delay: 0.1 }}
-          className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8"
+          className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 mb-8"
         >
           {stats.map((stat, index) => (
             <StatsCard key={index} {...stat} delay={index * 0.1} />
