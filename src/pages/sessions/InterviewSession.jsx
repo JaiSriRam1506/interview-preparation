@@ -2762,9 +2762,9 @@ const InterviewSession = () => {
                         type="button"
                         onClick={handleGenerateAIAnswer}
                         disabled={isGeneratingAnswer}
-                        className="w-28 sm:w-32 px-2.5 py-1.5 rounded-lg bg-gray-900 text-white text-xs sm:text-sm font-semibold hover:bg-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="w-10 sm:w-32 px-2.5 py-1.5 rounded-lg bg-gray-900 text-white text-xs sm:text-sm font-semibold hover:bg-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        {isGeneratingAnswer ? "Generating…" : "AI Answer"}
+                        {isGeneratingAnswer ? "Generating…" : "AI"}
                       </button>
 
                       <div className="flex items-center gap-1">
@@ -2786,7 +2786,7 @@ const InterviewSession = () => {
                           className="h-9 px-2.5 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-xs sm:text-sm font-semibold hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
                           title="Regenerate answer"
                         >
-                          Regenerate
+                          ReG
                         </button>
 
                         <button
@@ -2797,8 +2797,8 @@ const InterviewSession = () => {
                           title="Hard reset all connections"
                         >
                           <span className="inline-flex items-center gap-1">
-                            <Power className="h-4 w-4" />
-                            {isHardResetting ? "Resetting…" : "Hard Reset"}
+                            <Power className="h-4 w-2" />
+                            {isHardResetting ? "" : ""}
                           </span>
                         </button>
 
