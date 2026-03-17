@@ -2797,7 +2797,7 @@ const InterviewSession = () => {
                           title="Hard reset all connections"
                         >
                           <span className="inline-flex items-center gap-1">
-                            <Power className="h-4 w-2" />
+                            <Power className="h-4 w-4" />
                             {isHardResetting ? "" : ""}
                           </span>
                         </button>
